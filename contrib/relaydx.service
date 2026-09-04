@@ -1,0 +1,13 @@
+[Unit]
+Description=relaydx IPv4/IPv6 relay
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/relaydx
+ExecStart=/usr/sbin/relaydx $RELAYDX_OPTIONS
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

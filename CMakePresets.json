@@ -1,0 +1,35 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "macos-index",
+      "displayName": "macOS source index (Linux build disabled)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/cmake-build-index",
+      "cacheVariables": {
+        "RELAYDX_BUILD_EXECUTABLE": "OFF"
+      }
+    },
+    {
+      "name": "linux",
+      "displayName": "Linux relaydx",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/cmake-build-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "RELAYDX_BUILD_EXECUTABLE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-release",
+      "configurePreset": "linux"
+    }
+  ]
+}

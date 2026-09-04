@@ -1,0 +1,48 @@
+# Command-line flags. See README.md / README.zh.md.
+# 命令行参数。说明见 README.md / README.zh.md。
+# Do not add -d: the systemd unit is Type=simple.
+# 不要加 -d：systemd 单元是 Type=simple。
+#
+# wls224 = upstream / 上游, ens256 = downstream / 下游.
+# Uncomment exactly one RELAYDX_OPTIONS line.
+# 只保留一行 RELAYDX_OPTIONS 生效。
+
+# Dual-stack full relay: IPv4 ARP/DHCP/broadcast + IPv6 RA/DHCPv6/NDP.
+# 双栈全功能中继：IPv4 ARP/DHCP/广播 + IPv6 RA/DHCPv6/NDP。
+RELAYDX_OPTIONS="-4 -6 -M wls224 -I wls224 -I ens256 --broadcast4 --dhcp4"
+
+# IPv4 only (ARP + DHCP + broadcast).
+# 仅 IPv4（ARP + DHCP + 广播）。
+#RELAYDX_OPTIONS="-4 -I wls224 -I ens256 --broadcast4 --dhcp4"
+
+# IPv4 ARP only (no DHCP/broadcast forwarding).
+# 仅 IPv4 ARP（不转发 DHCP/广播）。
+#RELAYDX_OPTIONS="-4 -I wls224 -I ens256"
+
+# IPv4 relay, and let this host reach the relayed networks.
+# 仅 IPv4，并允许本机访问被中继网络。把地址换成专用源地址。
+#RELAYDX_OPTIONS="-4 -I wls224 -I ens256 --broadcast4 --dhcp4 --local4 192.168.1.2"
+
+# IPv6 relay only (RA + DHCPv6 + NDP).
+# 仅 IPv6 中继（RA + DHCPv6 + NDP）。
+#RELAYDX_OPTIONS="-6 -M wls224 -i wls224 -i ens256"
+
+# IPv6 RA/NDP relay, without DHCPv6.
+# 仅 IPv6 RA/NDP 中继，关闭 DHCPv6。
+#RELAYDX_OPTIONS="-6 --dhcp6 off -M wls224 -i wls224 -i ens256"
+
+# IPv6 NDP proxy; ens256 is external (DAD only, no host NDP proxy).
+# IPv6 NDP 代理；ens256 为外部接口（只处理 DAD，不代理主机 NDP）。
+#RELAYDX_OPTIONS="-6 -M wls224 -i wls224 -i '~ens256'"
+
+# IPv6 RA/DHCPv6 server only (no upstream, no NDP).
+# 仅 IPv6 RA/DHCPv6 服务器（无上游，无 NDP）。
+#RELAYDX_OPTIONS="--server6 -M . -i ens256"
+
+# IPv4 relay + IPv6 RA/DHCPv6 server.
+# IPv4 中继 + IPv6 RA/DHCPv6 服务器。
+#RELAYDX_OPTIONS="-4 --server6 -M . -I wls224 -I ens256 --broadcast4 --dhcp4"
+
+# IPv6 server with DNS rewrite and a lease file.
+# IPv6 服务器：改写 DNS，并写出租约文件。
+#RELAYDX_OPTIONS="--server6 -M . -i ens256 --rewrite-dns6 --state6 /var/lib/relaydx/leases"
