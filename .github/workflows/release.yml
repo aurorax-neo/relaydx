@@ -36,6 +36,20 @@ jobs:
       - name: Make release script executable
         run: chmod +x scripts/release.sh
 
+      - name: Verify version.txt
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          expected="$(tr -d '[:space:]' < version.txt)"
+          if [ "$EVENT_NAME" = push ]; then
+            actual="${EVENT_TAG#v}"
+          else
+            actual="${INPUT_TAG#v}"
+          fi
+          test "$actual" = "$expected"
+
       - name: Build and package
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -62,6 +76,11 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      - name: Check out source metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
@@ -80,6 +99,20 @@ jobs:
           else
             echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Verify release version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          expected="$(tr -d '[:space:]' < version.txt)"
+          if [ "$EVENT_NAME" = push ]; then
+            actual="${EVENT_TAG#v}"
+          else
+            actual="${INPUT_TAG#v}"
+          fi
+          test "$actual" = "$expected"
 
       - name: Verify checksums
         working-directory: dist

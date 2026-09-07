@@ -4,12 +4,27 @@ set -Eeuo pipefail
 root_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 version=${1:-}
 arch=${2:-$(uname -m)}
+version_file="$root_dir/version.txt"
 
+if [[ ! -f "$version_file" ]]; then
+    printf 'Missing version file: %s\n' "$version_file" >&2
+    exit 1
+fi
+file_version=$(head -n 1 "$version_file" | tr -d '[:space:]')
+if [[ ! "$file_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+    printf 'Invalid version.txt value: %s\n' "$file_version" >&2
+    exit 1
+fi
 if [[ -z "$version" ]]; then
-    version=$(git -C "$root_dir" describe --tags --always --dirty 2>/dev/null || echo 0.1.0)
+    version="$file_version"
 fi
 version=${version#v}
 version=${version//\//-}
+if [[ "$version" != "$file_version" ]]; then
+    printf 'Release version %s does not match version.txt (%s)\n' \
+        "$version" "$file_version" >&2
+    exit 1
+fi
 
 case "$arch" in
     aarch64|arm64) archive_arch=arm64 ;;
