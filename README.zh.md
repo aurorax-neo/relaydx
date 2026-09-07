@@ -33,23 +33,32 @@ sudo cmake --install cmake-build-linux --prefix /usr
 
 ## 发布包
 
-下载与架构匹配的压缩包，校验、解压并运行包内安装脚本。官方发布程序使用
-musl 完全静态链接，不依赖特定 glibc 版本，可直接用于 Debian 12、Debian 13
-等受支持的 Linux 系统：
+官方发布程序使用 musl 完全静态链接，不依赖特定 glibc 版本。x86-64 Linux
+可使用以下命令下载并安装：
 
 ```sh
-sha256sum -c relaydx-0.1.0-linux-amd64.tar.gz.sha256
-tar -xzf relaydx-0.1.0-linux-amd64.tar.gz
-cd relaydx-0.1.0-linux-amd64
+VERSION=v0.1.1
+TARGET=x86_64-unknown-linux-musl
+curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
+curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
+sha256sum -c "relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
+tar -xzf "relaydx-${VERSION}-${TARGET}.tar.gz"
+cd "relaydx-${VERSION}-${TARGET}"
 sudo ./install.sh
 sudo editor /etc/default/relaydx
 sudo systemctl enable --now relaydx
 ```
 
+ARM64 使用：
+
+```sh
+TARGET=aarch64-unknown-linux-musl
+```
+
 每个压缩包只有一个顶层目录，内部为简单的平铺结构：
 
 ```text
-relaydx-0.1.0-linux-amd64/
+relaydx-v0.1.1-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
@@ -67,16 +76,10 @@ relaydx-0.1.0-linux-amd64/
 `/etc/default/relaydx`。已有配置不会被覆盖。使用
 `sudo ./uninstall.sh` 卸载程序；添加 `--purge` 可同时删除配置。
 
-维护者可直接根据 `version.txt` 构建发布包。打包需要 `musl-gcc`
-（`musl-tools`）和 `readelf`（`binutils`）；脚本会拒绝任何动态链接的发布程序：
-
-```sh
-sudo apt-get install musl-tools binutils
-./scripts/release.sh
-```
-
-推送与版本匹配的 `v*` tag 会触发 `.github/workflows/release.yml`，自动
-构建 amd64 和 arm64 包、校验 SHA256 并创建 GitHub Release。
+推送与 `version.txt` 匹配的 tag（例如 `v0.1.1`）会触发
+`.github/workflows/release.yml`。workflow 直接完成两个目标平台的构建、
+静态链接检查、打包、SHA256 和 GitHub Release 发布。若同版本 GitHub
+Release 已存在，则跳过构建和发布任务。
 
 ## 快速开始
 

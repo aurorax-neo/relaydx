@@ -35,24 +35,32 @@ sudo cmake --install cmake-build-linux --prefix /usr
 
 ## Release packages
 
-Download the archive for your architecture, verify it, extract it, and run the
-included installer. Official release binaries are fully static musl builds, so
-they do not require a particular glibc version and run on supported Linux
-systems such as Debian 12 and Debian 13:
+Official release binaries are fully static musl builds, so they do not require
+a particular glibc version. For x86-64 Linux, download and install with:
 
 ```sh
-sha256sum -c relaydx-0.1.0-linux-amd64.tar.gz.sha256
-tar -xzf relaydx-0.1.0-linux-amd64.tar.gz
-cd relaydx-0.1.0-linux-amd64
+VERSION=v0.1.1
+TARGET=x86_64-unknown-linux-musl
+curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
+curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
+sha256sum -c "relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
+tar -xzf "relaydx-${VERSION}-${TARGET}.tar.gz"
+cd "relaydx-${VERSION}-${TARGET}"
 sudo ./install.sh
 sudo editor /etc/default/relaydx
 sudo systemctl enable --now relaydx
 ```
 
-Each archive has one top-level directory with a flat, readable layout:
+For ARM64, use:
+
+```sh
+TARGET=aarch64-unknown-linux-musl
+```
+
+Each archive has one top-level directory with a flat layout:
 
 ```text
-relaydx-0.1.0-linux-amd64/
+relaydx-v0.1.1-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
@@ -70,18 +78,11 @@ relaydx-0.1.0-linux-amd64/
 `/etc/default/relaydx`. An existing configuration is preserved. Remove the
 program with `sudo ./uninstall.sh`; add `--purge` to remove the configuration.
 
-Maintainers can build the package using the version in `version.txt`. Packaging
-requires `musl-gcc` (`musl-tools`) and `readelf` (`binutils`) because the script
-rejects dynamically linked release binaries:
-
-```sh
-sudo apt-get install musl-tools binutils
-./scripts/release.sh
-```
-
-Pushing the matching `v*` tag starts `.github/workflows/release.yml`, which
-builds amd64 and arm64 packages, verifies their checksums, and publishes a
-GitHub Release.
+Pushing a tag matching `version.txt` (for example `v0.1.1`) starts
+`.github/workflows/release.yml`. The workflow builds, statically verifies,
+packages, checksums, and publishes both target archives. If a GitHub Release
+with the same version already exists, the workflow skips the build and publish
+jobs.
 
 ## Quick start
 
