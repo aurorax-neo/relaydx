@@ -9,8 +9,11 @@ if [ -z "$root" ] && [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-install -d "$root/usr/sbin" "$root/etc/systemd/system" "$root/etc/default"
+install -d "$root/usr/sbin" "$root/usr/share/relaydx" \
+    "$root/etc/systemd/system" "$root/etc/default"
 install -m 0755 "$package_dir/relaydx" "$root/usr/sbin/relaydx"
+install -m 0755 "$package_dir/update.sh" "$root/usr/sbin/relaydx-update"
+install -m 0644 "$package_dir/version.txt" "$root/usr/share/relaydx/version.txt"
 install -m 0644 "$package_dir/relaydx.service" \
     "$root/etc/systemd/system/relaydx.service"
 
@@ -26,5 +29,6 @@ if [ -z "$root" ] && command -v systemctl >/dev/null 2>&1; then
 fi
 
 echo "Installed relaydx to /usr/sbin/relaydx"
+echo "Installed updater to /usr/sbin/relaydx-update"
 echo "Edit /etc/default/relaydx, then run:"
 echo "  sudo systemctl enable --now relaydx"

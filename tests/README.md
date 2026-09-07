@@ -19,3 +19,7 @@ They use `RELAYDX_BIN` when set; otherwise they default to the Debian VM path
 used by the project integration environment. The DHCPv6 helper programs used
 by the VM suite are kept in the integration harness because they are test
 clients rather than daemon sources.
+
+`update-e2e.sh` is a non-privileged CTest. It builds a fake GitHub Release
+layout, runs `scripts/update.sh` into a DESTDIR, verifies SHA256 and version
+metadata, then checks that the same version is skipped.

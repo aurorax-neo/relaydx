@@ -37,7 +37,7 @@ sudo cmake --install cmake-build-linux --prefix /usr
 可使用以下命令下载并安装：
 
 ```sh
-VERSION=v0.1.2
+VERSION=v0.1.3
 TARGET=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
@@ -58,12 +58,13 @@ TARGET=aarch64-unknown-linux-musl
 每个压缩包只有一个顶层目录，内部为简单的平铺结构：
 
 ```text
-relaydx-v0.1.2-x86_64-unknown-linux-musl/
+relaydx-v0.1.3-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
 ├── install.sh
 ├── uninstall.sh
+├── update.sh
 ├── version.txt
 ├── README.md
 ├── README.zh.md
@@ -71,12 +72,33 @@ relaydx-v0.1.2-x86_64-unknown-linux-musl/
 └── THIRD_PARTY_NOTICES.md
 ```
 
-`install.sh` 将程序安装到 `/usr/sbin/relaydx`，将服务单元安装到
+`install.sh` 将程序安装到 `/usr/sbin/relaydx`，将更新工具安装到
+`/usr/sbin/relaydx-update`，将版本信息安装到
+`/usr/share/relaydx/version.txt`，将服务单元安装到
 `/etc/systemd/system/relaydx.service`，并在首次安装时创建
 `/etc/default/relaydx`。已有配置不会被覆盖。使用
 `sudo ./uninstall.sh` 卸载程序；添加 `--purge` 可同时删除配置。
 
-推送与 `version.txt` 匹配的 tag（例如 `v0.1.2`）会触发
+### 更新已安装版本
+
+自动安装与当前 CPU 架构匹配的最新 GitHub Release：
+
+```sh
+sudo relaydx-update
+```
+
+安装指定版本：
+
+```sh
+sudo relaydx-update v0.1.3
+```
+
+更新工具会识别 `x86_64` 或 `aarch64`，下载对应的静态 musl 压缩包和
+SHA256 文件，校验后安装，保留 `/etc/default/relaydx`，并且只在原服务正在
+运行时重启 `relaydx.service`。若请求版本已经安装，则成功退出，不下载文件，
+也不重启服务。更新需要 `curl`、`sha256sum`、`tar` 和有效的系统 CA 证书。
+
+推送与 `version.txt` 匹配的 tag（例如 `v0.1.3`）会触发
 `.github/workflows/release.yml`。workflow 直接完成两个目标平台的构建、
 静态链接检查、打包、SHA256 和 GitHub Release 发布。若同版本 GitHub
 Release 已存在，则跳过构建和发布任务。

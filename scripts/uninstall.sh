@@ -20,7 +20,10 @@ if [ -z "$root" ] && command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now relaydx.service 2>/dev/null || true
 fi
 
-rm -f "$root/usr/sbin/relaydx" "$root/etc/systemd/system/relaydx.service"
+rm -f "$root/usr/sbin/relaydx" "$root/usr/sbin/relaydx-update" \
+    "$root/usr/share/relaydx/version.txt" \
+    "$root/etc/systemd/system/relaydx.service"
+rmdir "$root/usr/share/relaydx" 2>/dev/null || true
 if $purge; then
     rm -f "$root/etc/default/relaydx"
     echo "Removed /etc/default/relaydx"

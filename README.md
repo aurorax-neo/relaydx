@@ -39,7 +39,7 @@ Official release binaries are fully static musl builds, so they do not require
 a particular glibc version. For x86-64 Linux, download and install with:
 
 ```sh
-VERSION=v0.1.2
+VERSION=v0.1.3
 TARGET=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
@@ -60,12 +60,13 @@ TARGET=aarch64-unknown-linux-musl
 Each archive has one top-level directory with a flat layout:
 
 ```text
-relaydx-v0.1.2-x86_64-unknown-linux-musl/
+relaydx-v0.1.3-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
 ├── install.sh
 ├── uninstall.sh
+├── update.sh
 ├── version.txt
 ├── README.md
 ├── README.zh.md
@@ -73,12 +74,35 @@ relaydx-v0.1.2-x86_64-unknown-linux-musl/
 └── THIRD_PARTY_NOTICES.md
 ```
 
-`install.sh` installs the binary to `/usr/sbin/relaydx`, the unit to
+`install.sh` installs the binary to `/usr/sbin/relaydx`, the updater to
+`/usr/sbin/relaydx-update`, the version metadata to
+`/usr/share/relaydx/version.txt`, the unit to
 `/etc/systemd/system/relaydx.service`, and the initial configuration to
 `/etc/default/relaydx`. An existing configuration is preserved. Remove the
 program with `sudo ./uninstall.sh`; add `--purge` to remove the configuration.
 
-Pushing a tag matching `version.txt` (for example `v0.1.2`) starts
+### Updating an installed release
+
+Install the latest GitHub Release for the current CPU architecture:
+
+```sh
+sudo relaydx-update
+```
+
+Install a specific release:
+
+```sh
+sudo relaydx-update v0.1.3
+```
+
+The updater detects `x86_64` or `aarch64`, downloads the matching static-musl
+archive and SHA256 file, verifies and installs it, preserves
+`/etc/default/relaydx`, and restarts `relaydx.service` only if it was running.
+If the requested version is already installed, it exits successfully without
+downloading or restarting anything. The updater requires `curl`, `sha256sum`,
+`tar`, and valid system CA certificates.
+
+Pushing a tag matching `version.txt` (for example `v0.1.3`) starts
 `.github/workflows/release.yml`. The workflow builds, statically verifies,
 packages, checksums, and publishes both target archives. If a GitHub Release
 with the same version already exists, the workflow skips the build and publish

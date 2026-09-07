@@ -95,6 +95,11 @@ if(RELAYDX_BUILD_EXECUTABLE)
         set_tests_properties(relaydx_no_address6_rejects_dhcp PROPERTIES
             WILL_FAIL TRUE
         )
+        add_test(NAME relaydx_update_e2e
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/update-e2e.sh)
+        set_tests_properties(relaydx_update_e2e PROPERTIES
+            ENVIRONMENT "RELAYDX_BIN=$<TARGET_FILE:relaydx>"
+        )
     endif()
     if(RELAYDX_NETWORK_TESTING)
         add_test(NAME relaydx_ipv6_ra_e2e

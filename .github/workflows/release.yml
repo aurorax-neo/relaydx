@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag, for example v0.1.2'
+        description: 'Release tag, for example v0.1.3'
         required: true
         type: string
 
@@ -124,6 +124,7 @@ jobs:
           install -m 0755 build-release/relaydx "dist/$package/relaydx"
           install -m 0755 scripts/install.sh "dist/$package/install.sh"
           install -m 0755 scripts/uninstall.sh "dist/$package/uninstall.sh"
+          install -m 0755 scripts/update.sh "dist/$package/update.sh"
           install -m 0644 contrib/relaydx.service "dist/$package/relaydx.service"
           install -m 0644 contrib/relaydx.default "dist/$package/relaydx.default"
           install -m 0644 version.txt LICENSE README.md README.zh.md \
