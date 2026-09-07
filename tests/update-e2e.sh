@@ -33,8 +33,9 @@ tar -C "$TEMP_DIR" -czf "$SERVER/$PACKAGE.tar.gz" "$PACKAGE"
     sha256sum "$PACKAGE.tar.gz" > "$PACKAGE.tar.gz.sha256"
 )
 
+"$ROOT_DIR/scripts/update.sh" --help | grep -q -- '--mirror'
 DESTDIR="$INSTALL_ROOT" RELAYDX_BASE_URL="file://$SERVER" \
-    "$ROOT_DIR/scripts/update.sh" "v$VERSION"
+    "$ROOT_DIR/scripts/update.sh" --mirror https://ghfast.top "v$VERSION"
 test -x "$INSTALL_ROOT/usr/sbin/relaydx"
 test -x "$INSTALL_ROOT/usr/sbin/relaydx-update"
 test "$(tr -d '[:space:]' < "$INSTALL_ROOT/usr/share/relaydx/version.txt")" = \

@@ -29,7 +29,6 @@ set(RELAYDX_COMMON_SOURCES
     src/main.c
     src/core.c
     src/link.c
-    src/address.c
     src/dns.c
     src/libubox/uloop.c
 )
@@ -82,19 +81,6 @@ if(RELAYDX_BUILD_EXECUTABLE)
         set_tests_properties(relaydx_help PROPERTIES
             PASS_REGULAR_EXPRESSION "Usage:.*relaydx"
         )
-        add_test(NAME relaydx_no_address4_help COMMAND relaydx --help)
-        set_tests_properties(relaydx_no_address4_help PROPERTIES
-            PASS_REGULAR_EXPRESSION "--no-address4"
-        )
-        add_test(NAME relaydx_no_address6_help COMMAND relaydx --help)
-        set_tests_properties(relaydx_no_address6_help PROPERTIES
-            PASS_REGULAR_EXPRESSION "--no-address6"
-        )
-        add_test(NAME relaydx_no_address6_rejects_dhcp
-            COMMAND relaydx -6 --no-address6 -i test0 -i test1)
-        set_tests_properties(relaydx_no_address6_rejects_dhcp PROPERTIES
-            WILL_FAIL TRUE
-        )
         add_test(NAME relaydx_update_e2e
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/update-e2e.sh)
         set_tests_properties(relaydx_update_e2e PROPERTIES
@@ -108,10 +94,8 @@ if(RELAYDX_BUILD_EXECUTABLE)
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/dhcp6-iana-e2e.sh)
         add_test(NAME relaydx_dhcp6_pd_e2e
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/dhcp6-pd-e2e.sh)
-        add_test(NAME relaydx_addressless_e2e
-            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/addressless-e2e.sh)
         set_tests_properties(relaydx_ipv6_ra_e2e relaydx_dhcp6_iana_e2e
-            relaydx_dhcp6_pd_e2e relaydx_addressless_e2e PROPERTIES
+            relaydx_dhcp6_pd_e2e PROPERTIES
             ENVIRONMENT "RELAYDX_BIN=$<TARGET_FILE:relaydx>"
         )
     endif()

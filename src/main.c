@@ -54,8 +54,6 @@ enum {
 	OPT_STATIC_NDP6,
 	OPT_NO_INTERFACE_WATCH,
 	OPT_NO_FORWARDING_SETUP,
-	OPT_NO_ADDRESS4,
-	OPT_NO_ADDRESS6,
 };
 
 static struct interface_spec *specs;
@@ -107,8 +105,6 @@ static const struct option long_options[] = {
 	{"static-ndp6", required_argument, NULL, OPT_STATIC_NDP6},
 	{"no-interface-watch", no_argument, NULL, OPT_NO_INTERFACE_WATCH},
 	{"no-forwarding-setup", no_argument, NULL, OPT_NO_FORWARDING_SETUP},
-	{"no-address4", no_argument, NULL, OPT_NO_ADDRESS4},
-	{"no-address6", no_argument, NULL, OPT_NO_ADDRESS6},
 	{NULL, 0, NULL, 0},
 };
 
@@ -159,8 +155,6 @@ static int usage(const char *name, int status)
 		"  -p, --pidfile FILE         PID file (default: /var/run/relaydx.pid)\n"
 		"      --no-interface-watch   Exit instead of waiting/reloading on link changes\n"
 		"      --no-forwarding-setup  Do not enable kernel IP forwarding\n"
-		"      --no-address4          Remove IPv4 addresses from relay interfaces\n"
-		"      --no-address6          Keep only IPv6 link-local addresses\n"
 		"  -h, --help                 Show this help\n",
 		name);
 	return status;
@@ -527,18 +521,10 @@ static void stop_relay_runtime(void)
 }
 
 static int start_relay_runtime(const struct string_list *gateways,
-		const struct string_list *routes, bool setup_forwarding,
-		const char *const *interface_names)
+		const struct string_list *routes, bool setup_forwarding)
 {
 	if (prepare_interfaces() < 0)
 		return -1;
-	if (relaydx_enforce_address_policy(interface_names, spec_count,
-			relaydx_config.suppress_address4,
-			relaydx_config.suppress_address6) < 0) {
-		syslog(LOG_ERR, "Unable to enforce local address policy: %s",
-				strerror(errno));
-		goto error;
-	}
 	if (setup_forwarding && enable_kernel_forwarding() < 0) {
 		syslog(LOG_ERR, "Unable to configure kernel IP forwarding: %s",
 				strerror(errno));
@@ -750,8 +736,6 @@ int main(int argc, char **argv)
 			break;
 		case OPT_NO_INTERFACE_WATCH: watch_interfaces = false; break;
 		case OPT_NO_FORWARDING_SETUP: setup_forwarding = false; break;
-		case OPT_NO_ADDRESS4: relaydx_config.suppress_address4 = true; break;
-		case OPT_NO_ADDRESS6: relaydx_config.suppress_address6 = true; break;
 		default: goto invalid;
 		}
 	}
@@ -768,14 +752,6 @@ int main(int argc, char **argv)
 		goto invalid;
 	if (relaydx_config.enable_ipv4 && spec_count < 2) {
 		fprintf(stderr, "relaydx: IPv4 relay needs at least two interfaces\n");
-		goto out;
-	}
-	if (relaydx_config.suppress_address6 &&
-			(relaydx_config.enable_router_discovery_server ||
-			 relaydx_config.enable_dhcpv6_relay ||
-			 relaydx_config.enable_dhcpv6_server)) {
-		fprintf(stderr, "relaydx: --no-address6 requires RA relay/NDP mode "
-				"with --dhcp6 off\n");
 		goto out;
 	}
 	for (size_t i = 0; i < gateways.count; ++i) {
@@ -825,7 +801,6 @@ int main(int argc, char **argv)
 	}
 	if (watch_interfaces) {
 		if (relayd_link_watch_init(watched_names, spec_count,
-				relaydx_config.suppress_address6,
 				link_event_handler, NULL) < 0) {
 			syslog(LOG_ERR, "Unable to initialize interface monitor: %s",
 					strerror(errno));
@@ -876,7 +851,7 @@ int main(int argc, char **argv)
 				reported_unavailable[0] = '\0';
 			}
 			if (start_relay_runtime(&gateways, &routes,
-					setup_forwarding, watched_names) < 0) {
+					setup_forwarding) < 0) {
 				stop_relay_runtime();
 				if (watch_interfaces && !relayd_interfaces_ready(watched_names,
 						spec_count, unavailable, sizeof(unavailable)))
