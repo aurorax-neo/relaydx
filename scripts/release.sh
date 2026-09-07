@@ -32,21 +32,59 @@ case "$arch" in
     *) archive_arch=$arch ;;
 esac
 
+compiler=${RELAYDX_CC:-musl-gcc}
+if ! command -v "$compiler" >/dev/null 2>&1; then
+    printf 'Static release compiler not found: %s\n' "$compiler" >&2
+    printf 'Install musl-tools or set RELAYDX_CC to a musl compiler.\n' >&2
+    exit 1
+fi
+if ! command -v readelf >/dev/null 2>&1 || \
+        ! command -v strip >/dev/null 2>&1; then
+    printf 'readelf and strip are required from binutils.\n' >&2
+    exit 1
+fi
+
+multiarch=$("$compiler" -print-multiarch)
+kernel_asm_dir="/usr/include/$multiarch/asm"
+if [[ ! -d /usr/include/linux || ! -d /usr/include/asm-generic || \
+        ! -d "$kernel_asm_dir" ]]; then
+    printf 'Linux UAPI headers are missing for %s.\n' "$multiarch" >&2
+    printf 'Install the Linux libc development headers for this architecture.\n' >&2
+    exit 1
+fi
+
 build_dir="$root_dir/build-release"
 stage_dir="$root_dir/.release-stage"
 dist_dir="$root_dir/dist"
+uapi_dir="$stage_dir/linux-uapi"
 package_name="relaydx-${version}-linux-${archive_arch}"
 package_dir="$stage_dir/$package_name"
 archive="$package_name.tar.gz"
 
 rm -rf "$build_dir" "$stage_dir"
-mkdir -p "$dist_dir" "$package_dir"
+mkdir -p "$dist_dir" "$package_dir" "$uapi_dir"
+ln -s /usr/include/linux "$uapi_dir/linux"
+ln -s /usr/include/asm-generic "$uapi_dir/asm-generic"
+ln -s "$kernel_asm_dir" "$uapi_dir/asm"
 cmake -S "$root_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER="$compiler" \
+    -DCMAKE_C_FLAGS="-isystem $uapi_dir" \
+    -DCMAKE_EXE_LINKER_FLAGS=-static \
     -DRELAYDX_BUILD_EXECUTABLE=ON \
     -DRELAYDX_NETWORK_TESTING=OFF
 cmake --build "$build_dir" --parallel
 ctest --test-dir "$build_dir" --output-on-failure
+strip --strip-unneeded "$build_dir/relaydx"
+
+if readelf -l "$build_dir/relaydx" | grep -q ' INTERP '; then
+    printf 'Release binary contains a dynamic program interpreter.\n' >&2
+    exit 1
+fi
+if readelf -d "$build_dir/relaydx" | grep -q '(NEEDED)'; then
+    printf 'Release binary contains dynamic library dependencies.\n' >&2
+    exit 1
+fi
 
 install -m 0755 "$build_dir/relaydx" "$package_dir/relaydx"
 install -m 0755 "$root_dir/scripts/install.sh" "$package_dir/install.sh"

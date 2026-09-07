@@ -36,7 +36,9 @@ sudo cmake --install cmake-build-linux --prefix /usr
 ## Release packages
 
 Download the archive for your architecture, verify it, extract it, and run the
-included installer:
+included installer. Official release binaries are fully static musl builds, so
+they do not require a particular glibc version and run on supported Linux
+systems such as Debian 12 and Debian 13:
 
 ```sh
 sha256sum -c relaydx-0.1.0-linux-amd64.tar.gz.sha256
@@ -68,9 +70,12 @@ relaydx-0.1.0-linux-amd64/
 `/etc/default/relaydx`. An existing configuration is preserved. Remove the
 program with `sudo ./uninstall.sh`; add `--purge` to remove the configuration.
 
-Maintainers can build the package using the version in `version.txt`:
+Maintainers can build the package using the version in `version.txt`. Packaging
+requires `musl-gcc` (`musl-tools`) and `readelf` (`binutils`) because the script
+rejects dynamically linked release binaries:
 
 ```sh
+sudo apt-get install musl-tools binutils
 ./scripts/release.sh
 ```
 

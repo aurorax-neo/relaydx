@@ -33,7 +33,9 @@ sudo cmake --install cmake-build-linux --prefix /usr
 
 ## 发布包
 
-下载与架构匹配的压缩包，校验、解压并运行包内安装脚本：
+下载与架构匹配的压缩包，校验、解压并运行包内安装脚本。官方发布程序使用
+musl 完全静态链接，不依赖特定 glibc 版本，可直接用于 Debian 12、Debian 13
+等受支持的 Linux 系统：
 
 ```sh
 sha256sum -c relaydx-0.1.0-linux-amd64.tar.gz.sha256
@@ -65,9 +67,11 @@ relaydx-0.1.0-linux-amd64/
 `/etc/default/relaydx`。已有配置不会被覆盖。使用
 `sudo ./uninstall.sh` 卸载程序；添加 `--purge` 可同时删除配置。
 
-维护者可直接根据 `version.txt` 构建发布包：
+维护者可直接根据 `version.txt` 构建发布包。打包需要 `musl-gcc`
+（`musl-tools`）和 `readelf`（`binutils`）；脚本会拒绝任何动态链接的发布程序：
 
 ```sh
+sudo apt-get install musl-tools binutils
 ./scripts/release.sh
 ```
 

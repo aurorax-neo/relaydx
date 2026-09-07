@@ -33,6 +33,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install static build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools binutils
+
       - name: Make release script executable
         run: chmod +x scripts/release.sh
 
