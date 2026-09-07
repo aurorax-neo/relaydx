@@ -37,7 +37,7 @@ sudo cmake --install cmake-build-linux --prefix /usr
 可使用以下命令下载并安装：
 
 ```sh
-VERSION=v0.1.1
+VERSION=v0.1.2
 TARGET=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
@@ -58,7 +58,7 @@ TARGET=aarch64-unknown-linux-musl
 每个压缩包只有一个顶层目录，内部为简单的平铺结构：
 
 ```text
-relaydx-v0.1.1-x86_64-unknown-linux-musl/
+relaydx-v0.1.2-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
@@ -76,7 +76,7 @@ relaydx-v0.1.1-x86_64-unknown-linux-musl/
 `/etc/default/relaydx`。已有配置不会被覆盖。使用
 `sudo ./uninstall.sh` 卸载程序；添加 `--purge` 可同时删除配置。
 
-推送与 `version.txt` 匹配的 tag（例如 `v0.1.1`）会触发
+推送与 `version.txt` 匹配的 tag（例如 `v0.1.2`）会触发
 `.github/workflows/release.yml`。workflow 直接完成两个目标平台的构建、
 静态链接检查、打包、SHA256 和 GitHub Release 发布。若同版本 GitHub
 Release 已存在，则跳过构建和发布任务。
@@ -143,6 +143,7 @@ relaydx --help
 - GNU getopt 会重排参数，选项和接口可以交错书写。
 - 可选参数必须使用 `=` 形式（`--rewrite-dns6=ADDR`）。空格分隔的值会被当成独立参数并拒绝。
 - 选项按命令行出现顺序生效。同时给出 `-6` 与 `--server6` 时，重叠项以后出现的为准。
+- `--no-address6` 只能在关闭 DHCPv6 和 IPv6 server 模式时使用；在 `-6` 后添加 `--dhcp6 off`。
 
 ```sh
 # NDP + RA 中继，但关闭 DHCPv6
@@ -467,17 +468,77 @@ PID 文件路径。默认 `/var/run/relaydx.pid`。仅在使用 `-d` 时写入�
 
 `accept_ra=2` 在打开全局 IPv6 转发**之前**设置，这样上游接口仍然接受路由通告。
 
-`relaydx` 从不配置接口地址（包括静态 IPv6 地址）。
+#### `--no-address4`
+
+删除所有真实中继接口上的 IPv4 地址，并在接口监视开启时持续删除后来新增的
+IPv4 地址。IPv4 ARP、DHCP 和广播中继不要求本机持有 IPv4 地址。该参数不能
+阻止外部 DHCP client 或网络管理器继续申请地址；应同时在这些接口上关闭
+IPv4 DHCP，避免地址被反复添加和删除。不要对 SSH 或其他主机管理流量所用的
+接口启用此参数。
+
+#### `--no-address6`
+
+在所有真实中继接口上设置 `autoconf=0`、`use_tempaddr=0`，删除现有非
+link-local IPv6 地址，并持续删除后来新增的地址。必需的 `fe80::/64`
+link-local 地址会保留。此模式下 relaydx 会把上游 RA 学到的 on-link 前缀路由
+安装到下游中继接口，因此没有 connected 地址时 NDP 路由发现仍可工作。RA
+中继和 NDP 代理只需要 link-local，因此无全局地址的中继配置为：
+
+```sh
+relaydx -6 --dhcp6 off --no-address6 -M wan0 -i wan0 -i lan0
+```
+
+DHCPv6 relay 需要一个非 link-local 的 relay link-address 来标识客户端链路；
+IPv6 server 模式也需要已配置的前缀用于通告。因此 `--no-address6` 与 DHCPv6
+relay/server 或 RA server 模式不兼容，程序会拒绝启动。若需要在不生成 SLAAC
+地址的同时从上游 RA 学习默认路由，应组合使用 `autoconf=0` 和 master 接口的
+`accept_ra=2`；除非使用 `--no-forwarding-setup`，后者由 relaydx 自动设置。
+
+不使用地址抑制参数时，relaydx 不会主动添加接口地址，地址仍由系统网络管理器
+负责。
 
 #### `-h`, `--help`
 
 向 stdout 打印帮助并以 `0` 退出。非法用法把同一段文字打到 stderr，并以 `1` 退出。
 
+## 转发所需的内核与防火墙配置
+
+成功进行三层转发需要以下 Linux 设置。除非使用 `--no-forwarding-setup`，
+relaydx 会自动设置 forwarding 和上游 RA 相关值。
+
+| 地址族 | 必要设置 | 用途 |
+|--------|----------|------|
+| IPv4 | `net.ipv4.ip_forward=1` | 在中继接口间转发 IPv4 |
+| IPv4 非对称路径 | `net.ipv4.conf.<iface>.rp_filter=0` | 避免策略路由从其他接口返回时被严格反向路径检查丢弃 |
+| IPv6 | `net.ipv6.conf.all.forwarding=1` | 转发 IPv6 |
+| IPv6 RA 上游 | `net.ipv6.conf.<master>.accept_ra=2` | forwarding 开启后仍从 RA 学习路由 |
+| 所有 IPv6 接口 | `net.ipv6.conf.<iface>.disable_ipv6=0` | 保持 IPv6 和 link-local 地址可用 |
+| IPv6 无全局地址模式 | `net.ipv6.conf.<iface>.autoconf=0` | 禁止生成 SLAAC 全局地址 |
+
+防火墙必须允许所选接口之间的 FORWARD 流量。IPv6 还必须允许必要的 ICMPv6，
+包括 Router Solicitation、Router Advertisement、Neighbor Solicitation、
+Neighbor Advertisement、Packet Too Big 和 Time Exceeded。DHCP 中继还需要
+允许 IPv4 UDP 67/68 和 IPv6 UDP 546/547。无需设置内核 `proxy_arp` 或
+`proxy_ndp`，因为 relaydx 在用户态实现了这两个代理。
+
+如果不让 relaydx 设置这些值，最小手动示例为：
+
+```sh
+sysctl -w net.ipv4.ip_forward=1
+sysctl -w net.ipv4.conf.wan0.rp_filter=0
+sysctl -w net.ipv4.conf.lan0.rp_filter=0
+sysctl -w net.ipv6.conf.all.forwarding=1
+sysctl -w net.ipv6.conf.wan0.accept_ra=2
+```
+
+IPv6 转发不能关闭 IPv6，也不能删除 `fe80::/64` link-local 地址。RA/NDP
+中继不要求全局 IPv6 地址，但当前 DHCPv6 relay 模式要求非 link-local 地址。
+
 ## 接口监视
 
 接口监视默认开启。`relaydx` 可以在配置的接口尚不存在或没有载波时启动。它会等到每个真实接口同时处于管理 up 且 running（`IFF_UP | IFF_RUNNING`），再启动中继模块。任一侧 down 或消失时，守护进程会清除已学习的路由和中继状态并等待；全部接口恢复后再重新初始化模块。IPv4 地址变化（`RTM_NEWADDR` / `RTM_DELADDR`）也会触发进程内重载。
 
-若需要一次性行为，使用 `--no-interface-watch`。若 IPv4/IPv6 转发 sysctl 由其他组件管理，使用 `--no-forwarding-setup`。接口地址（包括静态 IPv6 地址）仍由 NetworkManager、systemd-networkd 或发行版网络配置负责。
+若需要一次性行为，使用 `--no-interface-watch`。若 IPv4/IPv6 转发 sysctl 由其他组件管理，使用 `--no-forwarding-setup`。默认情况下，接口地址仍由 NetworkManager、systemd-networkd 或发行版网络配置负责。使用 `--no-address4` 或 `--no-address6` 时，地址变化也会触发策略重新执行和进程内重载。
 
 | 信号 | 动作 |
 |------|------|

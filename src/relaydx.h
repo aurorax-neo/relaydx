@@ -130,6 +130,7 @@ struct arp_packet {
 
 struct relayd_config {
 	bool enable_ipv4;
+	bool suppress_address4;
 	bool forward_bcast4;
 	bool forward_dhcp4;
 	bool parse_dhcp4;
@@ -139,6 +140,7 @@ struct relayd_config {
 	uint8_t local_addr4[4];
 	bool local_addr4_valid;
 
+	bool suppress_address6;
 	bool enable_router_discovery_relay;
 	bool enable_router_discovery_server;
 	bool enable_dhcpv6_relay;
@@ -206,10 +208,12 @@ ssize_t relayd_dns_decode_name(const uint8_t *message, const uint8_t *end,
 typedef void (*relayd_link_event_cb)(bool available, bool address_change,
 		void *context);
 int relayd_link_watch_init(const char *const *ifnames, size_t count,
-		relayd_link_event_cb callback, void *context);
+		bool watch_ipv6_addresses, relayd_link_event_cb callback, void *context);
 void relayd_link_watch_done(void);
 bool relayd_interfaces_ready(const char *const *ifnames, size_t count,
 		char *unavailable, size_t unavailable_size);
+int relaydx_enforce_address_policy(const char *const *ifnames, size_t count,
+		bool suppress4, bool suppress6);
 
 void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
 		const struct relayd_interface *iface, const struct in6_addr *gw,

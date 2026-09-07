@@ -36,6 +36,8 @@ static void handle_icmpv6(void *addr, void *data, size_t len,
 static void send_router_advert(struct relayd_event *event);
 static void sigusr1_refresh(int signal);
 static void bind_icmp6_socket(const struct relayd_interface *iface);
+static void update_addressless_prefix_routes(const uint8_t *data, size_t len);
+static void clear_addressless_prefix_routes(void);
 
 static struct relayd_event router_discovery_event = {
 	.socket = -1,
@@ -46,12 +48,21 @@ static FILE *fp_route = NULL;
 static const struct relayd_config *config = NULL;
 static bool in_shutdown = false;
 
+struct relayed_prefix_route {
+	struct in6_addr prefix;
+	uint8_t length;
+};
+
+static struct relayed_prefix_route relayed_prefix_routes[RELAYD_MAX_PREFIXES];
+static size_t relayed_prefix_route_count;
+
 
 
 int init_router_discovery_relay(const struct relayd_config *relayd_config)
 {
 	config = relayd_config;
 	in_shutdown = false;
+	relayed_prefix_route_count = 0;
 	if (config->slavecount < 1 || (!config->enable_router_discovery_relay &&
 			!config->enable_router_discovery_server))
 		return 0;
@@ -136,6 +147,7 @@ void deinit_router_discovery_relay(void)
 	if (!config)
 		return;
 
+	clear_addressless_prefix_routes();
 	if (config->enable_router_discovery_server && fp_route) {
 		in_shutdown = true;
 		for (size_t i = 0; i < config->slavecount; ++i) {
@@ -531,9 +543,78 @@ static void forward_router_solicitation(const struct relayd_interface *iface)
 
 
 // Handler for incoming router solicitations on slave interfaces
+static void clear_addressless_prefix_routes(void)
+{
+	if (!config || !config->suppress_address6)
+		return;
+	for (size_t i = 0; i < relayed_prefix_route_count; ++i) {
+		for (size_t j = 0; j < config->slavecount; ++j)
+			relayd_setup_route(&relayed_prefix_routes[i].prefix,
+					relayed_prefix_routes[i].length, &config->slaves[j], NULL,
+					false);
+	}
+	relayed_prefix_route_count = 0;
+}
+
+static void mask_prefix(struct in6_addr *prefix, uint8_t length)
+{
+	unsigned int byte = length / 8;
+	unsigned int bits = length % 8;
+
+	if (byte < sizeof(prefix->s6_addr) && bits) {
+		prefix->s6_addr[byte] &= (uint8_t)(0xff << (8 - bits));
+		byte++;
+	}
+	while (byte < sizeof(prefix->s6_addr))
+		prefix->s6_addr[byte++] = 0;
+}
+
+static void update_addressless_prefix_routes(const uint8_t *data, size_t len)
+{
+	const struct nd_router_advert *advert =
+			(const struct nd_router_advert *)data;
+	const uint8_t *cursor = (const uint8_t *)&advert[1];
+	const uint8_t *end = data + len;
+
+	if (!config->suppress_address6)
+		return;
+	clear_addressless_prefix_routes();
+	while (cursor + sizeof(struct nd_opt_hdr) <= end &&
+			relayed_prefix_route_count < RELAYD_MAX_PREFIXES) {
+		const struct nd_opt_hdr *header = (const struct nd_opt_hdr *)cursor;
+		size_t option_length = (size_t)header->nd_opt_len * 8;
+
+		if (!option_length || cursor + option_length > end)
+			break;
+		if (header->nd_opt_type == ND_OPT_PREFIX_INFORMATION &&
+				option_length >= sizeof(struct nd_opt_prefix_info)) {
+			const struct nd_opt_prefix_info *prefix =
+					(const struct nd_opt_prefix_info *)cursor;
+			struct relayed_prefix_route *route;
+
+			if (prefix->nd_opt_pi_prefix_len > 0 &&
+					(prefix->nd_opt_pi_flags_reserved & ND_OPT_PI_FLAG_ONLINK) &&
+					ntohl(prefix->nd_opt_pi_valid_time) > 0 &&
+					!IN6_IS_ADDR_LINKLOCAL(&prefix->nd_opt_pi_prefix) &&
+					!IN6_IS_ADDR_MULTICAST(&prefix->nd_opt_pi_prefix)) {
+				route = &relayed_prefix_routes[relayed_prefix_route_count++];
+				route->prefix = prefix->nd_opt_pi_prefix;
+				route->length = prefix->nd_opt_pi_prefix_len;
+				mask_prefix(&route->prefix, route->length);
+				for (size_t i = 0; i < config->slavecount; ++i)
+					relayd_setup_route(&route->prefix, route->length,
+							&config->slaves[i], NULL, true);
+			}
+		}
+		cursor += option_length;
+	}
+}
+
 static void forward_router_advertisement(uint8_t *data, size_t len)
 {
 	struct nd_router_advert *adv = (struct nd_router_advert *)data;
+
+	update_addressless_prefix_routes(data, len);
 
 	// Rewrite options
 	uint8_t *end = data + len;

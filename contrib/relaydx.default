@@ -35,6 +35,12 @@ RELAYDX_OPTIONS="-4 -6 -M wls224 -I wls224 -I ens256 --broadcast4 --dhcp4"
 # IPv6 NDP 代理；ens256 为外部接口（只处理 DAD，不代理主机 NDP）。
 #RELAYDX_OPTIONS="-6 -M wls224 -i wls224 -i '~ens256'"
 
+# Addressless relay host: remove IPv4 addresses and keep only IPv6 link-local.
+# 无地址中继主机：删除 IPv4 地址，IPv6 只保留 link-local。
+# DHCPv6 relay needs a non-link-local address, so it must be disabled here.
+# DHCPv6 relay 需要非 link-local 地址，因此此处必须关闭。
+#RELAYDX_OPTIONS="-4 -6 --dhcp6 off --no-address4 --no-address6 -M wls224 -I wls224 -I ens256 --broadcast4 --dhcp4"
+
 # IPv6 RA/DHCPv6 server only (no upstream, no NDP).
 # 仅 IPv6 RA/DHCPv6 服务器（无上游，无 NDP）。
 #RELAYDX_OPTIONS="--server6 -M . -i ens256"

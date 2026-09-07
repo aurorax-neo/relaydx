@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 BIN="${RELAYDX_BIN:-/home/relaydx/relaydx/build/relaydx}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 p=""
 cleanup() {
   [ -z "$p" ] || kill -TERM "$p" 2>/dev/null || true
@@ -33,7 +34,7 @@ ip netns exec nsup ip -6 addr add fd10::100/64 dev up0
 $BIN -6 -M rdx0 -i rdx0 -i rdx1 --no-forwarding-setup -vv >/tmp/rdx-ipv6-e2e.log 2>&1 & p=$!
 sleep 3
 kill -0 "$p"
-ip netns exec nsup python3 /tmp/relaydx-ra-router.py up0 fe80::100 fd10::
+ip netns exec nsup python3 "$SCRIPT_DIR/ra-router.py" up0 fe80::100 fd10::
 addr=""
 for _ in $(seq 1 15); do
   addr=$(ip netns exec nsdown ip -o -6 addr show dev down0 scope global | sed -n '1s/.* inet6 \([^/]*\).*/\1/p')

@@ -16,6 +16,7 @@ static struct uloop_fd watch_fd = {.fd = -1};
 static int status_socket = -1;
 static const char *const *watched_names;
 static size_t watched_count;
+static bool monitor_ipv6_addresses;
 static relayd_link_event_cb event_callback;
 static void *event_context;
 
@@ -91,7 +92,8 @@ static void handle_link_messages(struct uloop_fd *fd, unsigned int events)
 				struct ifaddrmsg *info = NLMSG_DATA(header);
 
 				if (NLMSG_PAYLOAD(header, 0) < sizeof(*info) ||
-						info->ifa_family != AF_INET ||
+						(info->ifa_family != AF_INET &&
+						 !(monitor_ipv6_addresses && info->ifa_family == AF_INET6)) ||
 						!interface_is_watched(info->ifa_index, NULL))
 					continue;
 				if (event_callback)
@@ -102,11 +104,12 @@ static void handle_link_messages(struct uloop_fd *fd, unsigned int events)
 }
 
 int relayd_link_watch_init(const char *const *ifnames, size_t count,
-		relayd_link_event_cb callback, void *context)
+		bool watch_ipv6_addresses, relayd_link_event_cb callback, void *context)
 {
 	struct sockaddr_nl address = {
 		.nl_family = AF_NETLINK,
-		.nl_groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR,
+		.nl_groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR |
+				(watch_ipv6_addresses ? RTMGRP_IPV6_IFADDR : 0),
 	};
 
 	watched_names = ifnames;
@@ -114,6 +117,7 @@ int relayd_link_watch_init(const char *const *ifnames, size_t count,
 	event_callback = callback;
 	event_context = context;
 
+	monitor_ipv6_addresses = watch_ipv6_addresses;
 	status_socket = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	if (status_socket < 0)
 		goto error;
@@ -148,6 +152,7 @@ void relayd_link_watch_done(void)
 	}
 	watched_names = NULL;
 	watched_count = 0;
+	monitor_ipv6_addresses = false;
 	event_callback = NULL;
 	event_context = NULL;
 }

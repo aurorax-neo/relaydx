@@ -39,7 +39,7 @@ Official release binaries are fully static musl builds, so they do not require
 a particular glibc version. For x86-64 Linux, download and install with:
 
 ```sh
-VERSION=v0.1.1
+VERSION=v0.1.2
 TARGET=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
@@ -60,7 +60,7 @@ TARGET=aarch64-unknown-linux-musl
 Each archive has one top-level directory with a flat layout:
 
 ```text
-relaydx-v0.1.1-x86_64-unknown-linux-musl/
+relaydx-v0.1.2-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
@@ -78,7 +78,7 @@ relaydx-v0.1.1-x86_64-unknown-linux-musl/
 `/etc/default/relaydx`. An existing configuration is preserved. Remove the
 program with `sudo ./uninstall.sh`; add `--purge` to remove the configuration.
 
-Pushing a tag matching `version.txt` (for example `v0.1.1`) starts
+Pushing a tag matching `version.txt` (for example `v0.1.2`) starts
 `.github/workflows/release.yml`. The workflow builds, statically verifies,
 packages, checksums, and publishes both target archives. If a GitHub Release
 with the same version already exists, the workflow skips the build and publish
@@ -151,6 +151,8 @@ relaydx --help
   before the value is treated as a separate argument and is rejected.
 - Flags are applied in command-line order. If both `-6` and `--server6` are
   given, the later one wins for overlapping settings.
+- `--no-address6` is valid only when DHCPv6 and IPv6 server modes are disabled;
+  use `--dhcp6 off` after `-6`.
 
 ```sh
 # NDP + RA relay, but no DHCPv6
@@ -533,13 +535,79 @@ Default sysctl changes, applied only for enabled families:
 `accept_ra=2` is set **before** global IPv6 forwarding so the upstream
 interface still accepts Router Advertisements.
 
-Interface addresses, including static IPv6 addresses, are never configured by
-`relaydx`.
+#### `--no-address4`
+
+Remove every IPv4 address from all real relay interfaces and remove addresses
+added later while interface monitoring is active. IPv4 ARP, DHCP and broadcast
+relay do not require a local IPv4 address. This option does not stop an external
+DHCP client or network manager from requesting addresses; disable IPv4 DHCP on
+these interfaces to avoid repeatedly adding and removing the same address.
+Never apply it to the interface used for SSH or other required host access.
+
+#### `--no-address6`
+
+Set `autoconf=0` and `use_tempaddr=0` on all real relay interfaces, remove
+existing non-link-local IPv6 addresses, and remove addresses added later. The
+mandatory `fe80::/64` link-local address is preserved. In this mode relaydx
+installs the on-link prefix routes learned from upstream RA on downstream relay
+interfaces, so NDP route discovery still works without connected addresses. RA
+relay and NDP proxy work with link-local addresses only, so an addressless relay
+configuration is:
+
+```sh
+relaydx -6 --dhcp6 off --no-address6 -M wan0 -i wan0 -i lan0
+```
+
+DHCPv6 relay needs a non-link-local relay link-address to identify the client
+link, and IPv6 server mode needs configured prefixes to announce. Therefore
+`--no-address6` is rejected with DHCPv6 relay/server or RA server mode. To keep
+an upstream RA default route without SLAAC addresses, use `autoconf=0` together
+with `accept_ra=2` on the master; relaydx sets the latter unless
+`--no-forwarding-setup` is used.
+
+Without either suppression option, relaydx does not add interface addresses;
+address assignment remains the responsibility of the host network manager.
 
 #### `-h`, `--help`
 
 Print help to stdout and exit `0`. Invalid usage prints the same text to
 stderr and exits `1`.
+
+## Required kernel and firewall configuration
+
+Successful routed forwarding requires the following Linux settings. relaydx
+sets the forwarding and upstream RA values automatically unless
+`--no-forwarding-setup` is specified.
+
+| Family | Required setting | Purpose |
+|--------|------------------|---------|
+| IPv4 | `net.ipv4.ip_forward=1` | Forward routed IPv4 packets between relay interfaces |
+| IPv4 asymmetric paths | `net.ipv4.conf.<iface>.rp_filter=0` | Avoid strict reverse-path drops when policy routes use another interface |
+| IPv6 | `net.ipv6.conf.all.forwarding=1` | Forward routed IPv6 packets |
+| IPv6 RA upstream | `net.ipv6.conf.<master>.accept_ra=2` | Continue learning RA routes while forwarding is enabled |
+| IPv6 all interfaces | `net.ipv6.conf.<iface>.disable_ipv6=0` | Keep IPv6 and link-local addressing enabled |
+| IPv6 addressless mode | `net.ipv6.conf.<iface>.autoconf=0` | Do not create SLAAC global addresses |
+
+The firewall must permit forwarding between the selected interfaces. IPv6 must
+also permit essential ICMPv6 traffic, including Router Solicitation,
+Router Advertisement, Neighbor Solicitation, Neighbor Advertisement, Packet
+Too Big and Time Exceeded. DHCP forwarding additionally requires UDP 67/68 for
+IPv4 and UDP 546/547 for IPv6. Kernel `proxy_arp` and `proxy_ndp` sysctls are
+not required because relaydx implements both proxies in userspace.
+
+When managing these values outside relaydx, a minimal example is:
+
+```sh
+sysctl -w net.ipv4.ip_forward=1
+sysctl -w net.ipv4.conf.wan0.rp_filter=0
+sysctl -w net.ipv4.conf.lan0.rp_filter=0
+sysctl -w net.ipv6.conf.all.forwarding=1
+sysctl -w net.ipv6.conf.wan0.accept_ra=2
+```
+
+For IPv6 forwarding, do not disable IPv6 or remove the `fe80::/64` link-local
+address. A global IPv6 address is optional for RA/NDP relay but required by the
+current DHCPv6 relay mode.
 
 ## Interface monitoring
 
@@ -553,9 +621,10 @@ changes (`RTM_NEWADDR` / `RTM_DELADDR`) also trigger an in-process reload.
 
 Use `--no-interface-watch` for one-shot behavior and
 `--no-forwarding-setup` if another component owns the IPv4/IPv6 forwarding
-sysctls. Interface addresses, including static IPv6 addresses, remain the
-responsibility of NetworkManager, systemd-networkd, or the distribution
-network configuration.
+sysctls. By default, interface addresses remain the responsibility of
+NetworkManager, systemd-networkd, or the distribution network configuration.
+With `--no-address4` or `--no-address6`, address changes also trigger policy
+enforcement and an in-process reload.
 
 | Signal | Action |
 |--------|--------|
