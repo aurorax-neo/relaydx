@@ -23,26 +23,13 @@
 
 ## 构建
 
-运行时依赖 Linux 的原始套接字和 rtnetlink。项目仍可在 macOS 上完成 CMake
-配置，方便 CLion 索引和编辑源码。在 macOS 上可执行文件目标会被有意关闭；
-请使用 Linux 主机、CLion 远程工具链或 Linux 容器来构建和运行。
-
-依赖：Linux 上的 CMake 与 C99 编译器。事件循环和 DNS 报文辅助代码在源码树中，
-不需要额外的库。
-
-### Linux 构建
+仅支持 Linux。需要 CMake 和 C99 编译器，无额外依赖库。
 
 ```sh
 cmake --preset linux
 cmake --build --preset linux-release
 sudo cmake --install cmake-build-linux --prefix /usr
 ```
-
-### 在 macOS 上使用 CLion
-
-打开仓库根目录，不要打开 `src/` 或生成的构建目录。CLion 可用 `macos-index`
-CMake preset 做源码索引。要构建守护进程，请配置指向 Linux 编译器的 CLion
-工具链，并选择 `linux` preset。不要用 macOS 编译器去构建 `relaydx` 可执行文件。
 
 ## 快速开始
 
@@ -463,31 +450,6 @@ sudo systemctl status relaydx
 在 `/etc/default/relaydx` 中编辑 `RELAYDX_OPTIONS`。不要加 `-d`，该单元是
 `Type=simple`。不需要 `BindsTo=`、轮询接口的 `ExecStartPre`、NetworkManager
 dispatcher 或 `post-up` 重启钩子。服务的 `Restart=on-failure` 只用于真正的进程失败。
-
-## 项目结构
-
-```text
-src/
-|-- main.c          统一命令行与运行时监督
-|-- core.c          共享套接字与接口辅助
-|-- link.c          接口就绪与 rtnetlink 监视
-|-- relaydx.h       共享数据模型与 API
-|-- dns.c           本地 DNS 报文辅助
-|-- libubox/        事件循环（list + uloop）
-|-- ipv4/
-|   |-- relay.c     ARP 中继与 IPv4 主机跟踪
-|   |-- dhcp.c      DHCPv4 与广播转发
-|   `-- route.c     IPv4 策略路由与邻居事件
-`-- ipv6/
-    |-- ra.c        路由通告中继/服务器
-    |-- dhcp.c      DHCPv6 中继/服务器
-    |-- ia.c        IA_NA 与前缀委托
-    |-- ndp.c       邻居发现代理
-    `-- md5.c       DHCPv6 重配置认证辅助
-contrib/
-|-- relaydx.service systemd 单元
-`-- relaydx.default RELAYDX_OPTIONS 示例
-```
 
 ## 许可
 

@@ -25,28 +25,13 @@ Advertisements continue to be accepted.
 
 ## Build
 
-The runtime is Linux-specific because it uses raw packet sockets and rtnetlink.
-The project nevertheless configures cleanly on macOS so CLion can index and edit
-all sources. On macOS, the executable target is intentionally disabled; use a
-Linux host, a CLion remote toolchain, or a Linux container to build and run it.
-
-Dependencies: CMake and a C99 compiler on Linux. The event loop and DNS
-wire-format helpers are in the source tree; no extra libraries are required.
-
-### Linux build
+Linux only. Requires CMake and a C99 compiler; no extra libraries.
 
 ```sh
 cmake --preset linux
 cmake --build --preset linux-release
 sudo cmake --install cmake-build-linux --prefix /usr
 ```
-
-### CLion on macOS
-
-Open the repository root, not `src/` or a generated build directory. CLion can
-use the `macos-index` CMake preset for source indexing. To build the daemon,
-configure a CLion toolchain that points to a Linux compiler and select the
-`linux` preset. Do not select the macOS compiler for the `relaydx` executable.
 
 ## Quick start
 
@@ -544,31 +529,6 @@ Edit `RELAYDX_OPTIONS` in `/etc/default/relaydx`. Do not add `-d`; the unit is
 `Type=simple`. No `BindsTo=`, interface polling `ExecStartPre`, NetworkManager
 dispatcher, or `post-up` restart hook is needed. The service uses
 `Restart=on-failure` only for actual process failures.
-
-## Project layout
-
-```text
-src/
-|-- main.c          unified CLI and runtime supervisor
-|-- core.c          shared sockets and interface helpers
-|-- link.c          interface readiness and rtnetlink monitoring
-|-- relaydx.h       shared data model and APIs
-|-- dns.c           local DNS wire-format helpers
-|-- libubox/        event loop (list + uloop)
-|-- ipv4/
-|   |-- relay.c     ARP relay and IPv4 host tracking
-|   |-- dhcp.c      DHCPv4 and broadcast forwarding
-|   `-- route.c     IPv4 policy routes and neighbor events
-`-- ipv6/
-    |-- ra.c        Router Advertisement relay/server
-    |-- dhcp.c      DHCPv6 relay/server
-    |-- ia.c        IA_NA and prefix delegation
-    |-- ndp.c       Neighbor Discovery proxy
-    `-- md5.c       DHCPv6 reconfigure authentication helper
-contrib/
-|-- relaydx.service systemd unit
-`-- relaydx.default RELAYDX_OPTIONS example
-```
 
 ## License
 

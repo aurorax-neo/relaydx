@@ -264,6 +264,9 @@ static void handle_solicit(void *addr, void *data, size_t len,
 		return;
 	ip6 = data;
 	req = (struct nd_neighbor_solicit *)&ip6[1];
+	if ((ip6->ip6_vfc & 0xf0) != 0x60 || ip6->ip6_hlim != 255 ||
+			req->nd_ns_hdr.icmp6_code != 0)
+		return;
 	ns_is_dad = IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src);
 
 	// Don't forward any non-DAD solicitation for external ifaces
@@ -271,7 +274,8 @@ static void handle_solicit(void *addr, void *data, size_t len,
 	if (iface->external && !ns_is_dad)
 		return;
 
-	if (IN6_IS_ADDR_LINKLOCAL(&req->nd_ns_target) ||
+	if (IN6_IS_ADDR_UNSPECIFIED(&req->nd_ns_target) ||
+			IN6_IS_ADDR_LINKLOCAL(&req->nd_ns_target) ||
 			IN6_IS_ADDR_LOOPBACK(&req->nd_ns_target) ||
 			IN6_IS_ADDR_MULTICAST(&req->nd_ns_target))
 		return; // Invalid target
@@ -358,7 +362,7 @@ void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
 		struct rtattr rta_gw;
 		struct in6_addr gw;
 	} req = {
-		{sizeof(req), 0, NLM_F_REQUEST, ++rtnl_seqid, 0},
+		{sizeof(req), 0, NLM_F_REQUEST | NLM_F_ACK, ++rtnl_seqid, 0},
 		{AF_INET6, prefixlen, 0, 0, 0, 0, 0, 0, 0},
 		{sizeof(struct rtattr) + sizeof(struct in6_addr), RTA_DST},
 		*addr,
@@ -385,6 +389,7 @@ void relayd_setup_route(const struct in6_addr *addr, int prefixlen,
 	}
 
 	size_t reqlen = (gw) ? sizeof(req) : offsetof(struct req, rta_gw);
+	req.nh.nlmsg_len = reqlen;
 	send(rtnl_event.socket, &req, reqlen, MSG_DONTWAIT);
 }
 

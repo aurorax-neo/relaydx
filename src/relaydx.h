@@ -32,6 +32,8 @@
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define RELAYD_BUFFER_SIZE 8192
 #define RELAYD_MAX_PREFIXES 8
+#define RELAYD_MAX_IPV4_HOSTS 1024
+#define RELAYD_MAX_PENDING_ROUTES 1024
 
 /* RFC 4191 and RFC 6106 Router Advertisement options. */
 #define ND_OPT_ROUTE_INFO 24
@@ -87,6 +89,7 @@ struct relayd_interface {
 	struct sockaddr_ll sll;
 	struct sockaddr_ll bcast_sll;
 	struct list_head hosts;
+	size_t host_count;
 	uint8_t src_ip[4];
 	bool managed;
 	bool ipv4_routes_added;
@@ -190,6 +193,10 @@ struct relayd_interface *relayd_get_interface_by_index(int ifindex);
 int relayd_get_interface_mtu(const char *ifname);
 int relayd_get_interface_mac(const char *ifname, uint8_t mac[6]);
 void relayd_urandom(void *data, size_t len);
+int relaydx_notify(const char *message);
+void relaydx_log_ratelimited(int priority, const char *key, const char *format,
+		...);
+
 ssize_t relayd_dns_encode_name(const char *name, uint8_t *output,
 		size_t output_size);
 ssize_t relayd_dns_encode_search(uint8_t *output, size_t output_size);

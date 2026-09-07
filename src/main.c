@@ -66,6 +66,8 @@ static bool runtime_ipv4_started;
 static bool runtime_ipv6_attempted;
 static bool reload_requested;
 static struct uloop_timeout retry_timer;
+static struct uloop_timeout watchdog_timer;
+static unsigned int watchdog_interval_ms;
 
 static const struct option long_options[] = {
 	{"ipv4", no_argument, NULL, '4'},
@@ -261,6 +263,31 @@ static void reload_handler(_unused int signal_number)
 {
 	reload_requested = true;
 	uloop_end();
+}
+
+static void watchdog_handler(struct uloop_timeout *timeout)
+{
+	(void)timeout;
+	relaydx_notify("WATCHDOG=1");
+	uloop_timeout_set(&watchdog_timer, (int)watchdog_interval_ms);
+}
+
+static void setup_watchdog(void)
+{
+	const char *usec = getenv("WATCHDOG_USEC");
+	char *end;
+	unsigned long long interval;
+
+	if (!usec || !usec[0])
+		return;
+	interval = strtoull(usec, &end, 10);
+	if (*end || interval < 200000 || interval > UINT_MAX * 1000ULL)
+		return;
+	watchdog_interval_ms = (unsigned int)(interval / 2000);
+	if (!watchdog_interval_ms)
+		return;
+	watchdog_timer.cb = watchdog_handler;
+	uloop_timeout_set(&watchdog_timer, (int)watchdog_interval_ms);
 }
 
 static void retry_handler(_unused struct uloop_timeout *timeout)
@@ -542,6 +569,7 @@ static int start_relay_runtime(const struct string_list *gateways,
 	}
 
 	runtime_active = true;
+	relaydx_notify("READY=1");
 	syslog(LOG_NOTICE, "Relay active on %zu interfaces", spec_count);
 	return 0;
 
@@ -765,6 +793,7 @@ int main(int argc, char **argv)
 		goto out;
 	}
 	uloop_started = true;
+	setup_watchdog();
 	if (relayd_core_init() < 0) {
 		perror("relaydx: initialization failed");
 		status = 2;
@@ -858,6 +887,8 @@ runtime_out:
 	if (link_watch_started)
 		relayd_link_watch_done();
 	relayd_core_done();
+	if (uloop_started)
+		uloop_timeout_cancel(&watchdog_timer);
 	if (uloop_started)
 		uloop_done();
 	if (daemon_started)

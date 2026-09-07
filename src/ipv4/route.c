@@ -116,7 +116,7 @@ rtnl_rule_request(struct relayd_interface *rif, int flags)
 	req.table.table = get_route_table(rif);
 	req.nl.nlmsg_len = sizeof(req) - padding;
 
-	req.nl.nlmsg_flags = NLM_F_REQUEST;
+	req.nl.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 	if (flags & RULE_F_ADD) {
 		req.nl.nlmsg_type = RTM_NEWRULE;
 		req.nl.nlmsg_flags |= NLM_F_CREATE | NLM_F_EXCL;
@@ -186,7 +186,7 @@ rtnl_route_request(struct relayd_interface *rif, struct relayd_host *host,
 	req.dev.ifindex = host->rif->sll.sll_ifindex;
 	req.table.table = get_route_table(rif);
 
-	req.nl.nlmsg_flags = NLM_F_REQUEST;
+	req.nl.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
 	if (add) {
 		req.nl.nlmsg_type = RTM_NEWROUTE;
 		req.nl.nlmsg_flags |= NLM_F_CREATE | NLM_F_REPLACE;
@@ -315,8 +315,15 @@ static void rtnl_parse_packet(void *data, int len)
 	struct nlmsghdr *h;
 
 	for (h = data; NLMSG_OK(h, len); h = NLMSG_NEXT(h, len)) {
-		if (h->nlmsg_type == NLMSG_DONE ||
-		    h->nlmsg_type == NLMSG_ERROR)
+		if (h->nlmsg_type == NLMSG_ERROR) {
+			struct nlmsgerr *error = NLMSG_DATA(h);
+			if (error->error)
+				relaydx_log_ratelimited(LOG_WARNING, "ipv4-netlink",
+						"IPv4 netlink operation failed: %s",
+						strerror(-error->error));
+			continue;
+		}
+		if (h->nlmsg_type == NLMSG_DONE)
 			return;
 
 		if (h->nlmsg_seq != rtnl_dump_seq)

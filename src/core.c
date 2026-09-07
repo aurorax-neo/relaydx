@@ -5,8 +5,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
@@ -32,6 +35,65 @@ static void relayd_event_cb(struct uloop_fd *fd, unsigned int events)
 		event->handle_event(event);
 	else if (event->handle_dgram)
 		relayd_receive_packets(event);
+}
+
+void relaydx_log_ratelimited(int priority, const char *key, const char *format,
+		...)
+{
+	static struct {
+		const char *key;
+		time_t last;
+		unsigned int suppressed;
+	} entries[16];
+	struct timespec now;
+	unsigned int slot = 0;
+	va_list args;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	for (slot = 0; slot < ARRAY_SIZE(entries); ++slot) {
+		if (!entries[slot].key || !strcmp(entries[slot].key, key))
+			break;
+	}
+	if (slot == ARRAY_SIZE(entries))
+		slot = 0;
+	if (!entries[slot].key)
+		entries[slot].key = key;
+	if (entries[slot].last && now.tv_sec - entries[slot].last < 5) {
+		entries[slot].suppressed++;
+		return;
+	}
+	if (entries[slot].suppressed) {
+		syslog(LOG_WARNING, "%s: suppressed %u repeated messages", key,
+				entries[slot].suppressed);
+		entries[slot].suppressed = 0;
+	}
+	entries[slot].last = now.tv_sec;
+	va_start(args, format);
+	vsyslog(priority, format, args);
+	va_end(args);
+}
+
+int relaydx_notify(const char *message)
+{
+	const char *path = getenv("NOTIFY_SOCKET");
+	struct sockaddr_un address = {.sun_family = AF_UNIX};
+	int fd;
+	ssize_t sent;
+
+	if (!path || !path[0] || strlen(path) >= sizeof(address.sun_path))
+		return 0;
+	if (path[0] == '@')
+		address.sun_path[0] = '\0';
+	memcpy(address.sun_path + (path[0] == '@'), path + (path[0] == '@'),
+			strlen(path) - (path[0] == '@'));
+	fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return -1;
+	sent = sendto(fd, message, strlen(message), MSG_DONTWAIT,
+			(struct sockaddr *)&address,
+			offsetof(struct sockaddr_un, sun_path) + strlen(path));
+	close(fd);
+	return sent == (ssize_t)strlen(message) ? 0 : -1;
 }
 
 int relayd_core_init(void)
@@ -221,8 +283,8 @@ ssize_t relayd_forward_packet(int socket_fd, struct sockaddr_in6 *dest,
 
 	sent = sendmsg(socket_fd, &msg, MSG_DONTWAIT);
 	if (sent < 0)
-		syslog(LOG_WARNING, "Failed to relay on %s: %s", iface->ifname,
-				strerror(errno));
+		relaydx_log_ratelimited(LOG_WARNING, "relay-send",
+				"Failed to relay on %s: %s", iface->ifname, strerror(errno));
 	return sent;
 }
 

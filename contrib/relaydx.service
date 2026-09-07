@@ -3,7 +3,9 @@ Description=relaydx IPv4/IPv6 relay
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=30s
 EnvironmentFile=-/etc/default/relaydx
 ExecStart=/usr/sbin/relaydx $RELAYDX_OPTIONS
 Restart=on-failure

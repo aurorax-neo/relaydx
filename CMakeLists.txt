@@ -16,6 +16,9 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
+set(RELAYDX_NETWORK_TESTING OFF CACHE BOOL
+    "Enable privileged Linux network namespace tests")
+
 set(RELAYDX_COMMON_SOURCES
     src/main.c
     src/core.c
@@ -71,6 +74,18 @@ if(RELAYDX_BUILD_EXECUTABLE)
         add_test(NAME relaydx_help COMMAND relaydx --help)
         set_tests_properties(relaydx_help PROPERTIES
             PASS_REGULAR_EXPRESSION "Usage:.*relaydx"
+        )
+    endif()
+    if(RELAYDX_NETWORK_TESTING)
+        add_test(NAME relaydx_ipv6_ra_e2e
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/ipv6-ra-e2e.sh)
+        add_test(NAME relaydx_dhcp6_iana_e2e
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/dhcp6-iana-e2e.sh)
+        add_test(NAME relaydx_dhcp6_pd_e2e
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/dhcp6-pd-e2e.sh)
+        set_tests_properties(relaydx_ipv6_ra_e2e relaydx_dhcp6_iana_e2e
+            relaydx_dhcp6_pd_e2e PROPERTIES
+            ENVIRONMENT "RELAYDX_BIN=$<TARGET_FILE:relaydx>"
         )
     endif()
 

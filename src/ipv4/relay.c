@@ -32,6 +32,7 @@
 #include "relaydx.h"
 
 static LIST_HEAD(pending_routes);
+static size_t pending_route_count;
 
 static int host_timeout;
 static int host_ping_tries;
@@ -97,6 +98,7 @@ static void timeout_host_route(struct uloop_timeout *timeout)
 
 	rt = container_of(timeout, struct relayd_pending_route, timeout);
 	list_del(&rt->rt.list);
+	pending_route_count--;
 	free(rt);
 }
 
@@ -135,6 +137,7 @@ static void del_host(struct relayd_host *host)
 		relayd_del_route(host, NULL);
 	uloop_timeout_cancel(&host->timeout);
 	list_del(&host->list);
+	host->rif->host_count--;
 	free(host);
 }
 
@@ -187,6 +190,14 @@ void relayd_add_pending_route(const uint8_t *gateway, const uint8_t *dest, uint8
 		return;
 	}
 
+	list_for_each_entry(rt, &pending_routes, rt.list) {
+		if (rt->rt.mask == mask && !memcmp(rt->gateway, gateway, 4) &&
+				!memcmp(rt->rt.dest, dest, 4))
+			return;
+	}
+	if (pending_route_count >= RELAYD_MAX_PENDING_ROUTES)
+		return;
+
 	rt = calloc(1, sizeof(*rt));
 	if (!rt)
 		return;
@@ -195,6 +206,7 @@ void relayd_add_pending_route(const uint8_t *gateway, const uint8_t *dest, uint8
 	memcpy(rt->rt.dest, dest, sizeof(rt->rt.dest));
 	rt->rt.mask = mask;
 	list_add(&rt->rt.list, &pending_routes);
+	pending_route_count++;
 	if (timeout <= 0)
 		return;
 
@@ -276,6 +288,9 @@ static struct relayd_host *add_host(struct relayd_interface *rif, const uint8_t 
 	struct relayd_host *host;
 	struct relayd_pending_route *route, *rtmp;
 
+	if (rif->host_count >= RELAYD_MAX_IPV4_HOSTS)
+		return NULL;
+
 	DPRINTF(1, "%s: adding host "IP_FMT" ("MAC_FMT")\n", rif->ifname,
 			IP_BUF(ipaddr), MAC_BUF(lladdr));
 
@@ -287,6 +302,7 @@ static struct relayd_host *add_host(struct relayd_interface *rif, const uint8_t 
 	memcpy(host->ipaddr, ipaddr, sizeof(host->ipaddr));
 	memcpy(host->lladdr, lladdr, sizeof(host->lladdr));
 	list_add(&host->list, &rif->hosts);
+	rif->host_count++;
 	host->timeout.cb = host_entry_timeout;
 	uloop_timeout_set(&host->timeout, host_timeout * 1000);
 
@@ -304,6 +320,7 @@ static struct relayd_host *add_host(struct relayd_interface *rif, const uint8_t 
 
 		uloop_timeout_cancel(&route->timeout);
 		list_del(&route->rt.list);
+		pending_route_count--;
 		free(route);
 	}
 
@@ -658,6 +675,7 @@ static void cleanup_pending_routes(void)
 		list_del(&route->rt.list);
 		free(route);
 	}
+	pending_route_count = 0;
 }
 
 static void close_ipv4_interfaces(void)
