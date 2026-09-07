@@ -838,8 +838,8 @@ int main(int argc, char **argv)
 				if (strcmp(unavailable, reported_unavailable)) {
 					syslog(LOG_WARNING, "Waiting for interface %s",
 							unavailable);
-					strncpy(reported_unavailable, unavailable,
-							sizeof(reported_unavailable) - 1);
+					snprintf(reported_unavailable,
+							sizeof(reported_unavailable), "%s", unavailable);
 				}
 				reload_requested = false;
 				wait_for_interface_event();

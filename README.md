@@ -33,6 +33,18 @@ cmake --build --preset linux-release
 sudo cmake --install cmake-build-linux --prefix /usr
 ```
 
+## Release
+
+Create a Linux tarball and SHA256 file locally:
+
+```sh
+./scripts/release.sh v0.1.0
+```
+
+Pushing a tag matching `v*` starts `.github/workflows/release.yml`, which builds
+amd64 and arm64 packages, verifies their checksums, and publishes a GitHub
+Release. The workflow can also be started manually with a release tag input.
+
 ## Quick start
 
 Relay both IPv4 and IPv6 between an upstream and a downstream interface:

@@ -31,6 +31,18 @@ cmake --build --preset linux-release
 sudo cmake --install cmake-build-linux --prefix /usr
 ```
 
+## 发布
+
+在 Linux 上本地创建发布压缩包和 SHA256 校验文件：
+
+```sh
+./scripts/release.sh v0.1.0
+```
+
+推送匹配 `v*` 的 tag 会触发 `.github/workflows/release.yml`，自动构建
+amd64 和 arm64 包、校验 SHA256 并创建 GitHub Release。也可以在 GitHub
+Actions 页面手动运行 workflow 并填写发布 tag。
+
 ## 快速开始
 
 在上游和下游接口之间同时中继 IPv4 与 IPv6：

@@ -79,7 +79,7 @@ static void add_arp(struct relayd_host *host)
 	struct sockaddr_in *sin;
 	struct arpreq arp = {0};
 
-	strncpy(arp.arp_dev, host->rif->ifname, sizeof(arp.arp_dev) - 1);
+	snprintf(arp.arp_dev, sizeof(arp.arp_dev), "%s", host->rif->ifname);
 	arp.arp_flags = ATF_COM;
 
 	arp.arp_ha.sa_family = ARPHRD_ETHER;
