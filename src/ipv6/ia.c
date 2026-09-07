@@ -277,8 +277,10 @@ static void write_statefile(void)
 		if (fd < 0) {
 			return;
 		}
-		lockf(fd, F_LOCK, 0);
-		ftruncate(fd, 0);
+		if (lockf(fd, F_LOCK, 0) < 0 || ftruncate(fd, 0) < 0) {
+			close(fd);
+			return;
+		}
 
 		FILE *fp = fdopen(fd, "w");
 		if (!fp) {
