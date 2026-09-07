@@ -16,6 +16,9 @@ build
 cmake-build-debug
 cmake-build-index
 cmake-build-release
+build-release
+.release-stage
+dist
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

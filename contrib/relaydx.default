@@ -1,7 +1,7 @@
 # Command-line flags. See README.md / README.zh.md.
 # 命令行参数。说明见 README.md / README.zh.md。
-# Do not add -d: the systemd unit is Type=simple.
-# 不要加 -d：systemd 单元是 Type=simple。
+# Do not add -d: systemd must supervise the foreground process (Type=notify).
+# 不要加 -d：systemd 必须监控前台进程（Type=notify）。
 #
 # wls224 = upstream / 上游, ens256 = downstream / 下游.
 # Uncomment exactly one RELAYDX_OPTIONS line.

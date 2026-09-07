@@ -33,17 +33,50 @@ cmake --build --preset linux-release
 sudo cmake --install cmake-build-linux --prefix /usr
 ```
 
-## Release
+## Release packages
 
-Create a Linux tarball and SHA256 file locally:
+Download the archive for your architecture, verify it, extract it, and run the
+included installer:
 
 ```sh
-./scripts/release.sh v0.1.0
+sha256sum -c relaydx-0.1.0-linux-amd64.tar.gz.sha256
+tar -xzf relaydx-0.1.0-linux-amd64.tar.gz
+cd relaydx-0.1.0-linux-amd64
+sudo ./install.sh
+sudo editor /etc/default/relaydx
+sudo systemctl enable --now relaydx
 ```
 
-Pushing a tag matching `v*` starts `.github/workflows/release.yml`, which builds
-amd64 and arm64 packages, verifies their checksums, and publishes a GitHub
-Release. The workflow can also be started manually with a release tag input.
+Each archive has one top-level directory with a flat, readable layout:
+
+```text
+relaydx-0.1.0-linux-amd64/
+├── relaydx
+├── relaydx.service
+├── relaydx.default
+├── install.sh
+├── uninstall.sh
+├── version.txt
+├── README.md
+├── README.zh.md
+├── LICENSE
+└── THIRD_PARTY_NOTICES.md
+```
+
+`install.sh` installs the binary to `/usr/sbin/relaydx`, the unit to
+`/etc/systemd/system/relaydx.service`, and the initial configuration to
+`/etc/default/relaydx`. An existing configuration is preserved. Remove the
+program with `sudo ./uninstall.sh`; add `--purge` to remove the configuration.
+
+Maintainers can build the package using the version in `version.txt`:
+
+```sh
+./scripts/release.sh
+```
+
+Pushing the matching `v*` tag starts `.github/workflows/release.yml`, which
+builds amd64 and arm64 packages, verifies their checksums, and publishes a
+GitHub Release.
 
 ## Quick start
 
@@ -465,7 +498,7 @@ foreground, messages are also printed to stderr (`LOG_PERROR`).
 #### `-d`, `--daemon`
 
 Daemonize with `daemon(0, 0)` and write the PID file. Do **not** use this
-with the shipped systemd unit (`Type=simple`).
+with the shipped systemd unit (`Type=notify`).
 
 #### `-p`, `--pidfile FILE`
 
@@ -526,21 +559,27 @@ network configuration.
 
 ## systemd
 
-Examples are provided in `contrib/relaydx.service` and
-`contrib/relaydx.default`. For `wls224` as upstream and `ens256` as downstream:
+The release archive includes `install.sh`, `relaydx.service`, and
+`relaydx.default`. Install it as described under **Release packages**, then edit
+`RELAYDX_OPTIONS` in `/etc/default/relaydx` before starting the service.
+
+When installing from a source checkout instead, build and install the binary,
+then install the two integration files:
 
 ```sh
+sudo cmake --install cmake-build-linux --prefix /usr
 sudo install -m 0644 contrib/relaydx.service /etc/systemd/system/relaydx.service
 sudo install -m 0644 contrib/relaydx.default /etc/default/relaydx
 sudo systemctl daemon-reload
+sudo editor /etc/default/relaydx
 sudo systemctl enable --now relaydx
 sudo systemctl status relaydx
 ```
 
-Edit `RELAYDX_OPTIONS` in `/etc/default/relaydx`. Do not add `-d`; the unit is
-`Type=simple`. No `BindsTo=`, interface polling `ExecStartPre`, NetworkManager
-dispatcher, or `post-up` restart hook is needed. The service uses
-`Restart=on-failure` only for actual process failures.
+Do not add `-d`; the unit is `Type=notify` and supervises the foreground
+process. No `BindsTo=`, interface polling `ExecStartPre`, NetworkManager
+dispatcher, or `post-up` restart hook is needed. The service uses the systemd
+watchdog and `Restart=on-failure` only for actual process failures.
 
 ## License
 

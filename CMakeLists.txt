@@ -1,7 +1,13 @@
 cmake_minimum_required(VERSION 3.10)
 cmake_policy(SET CMP0076 NEW)
 
-project(relaydx VERSION 0.1.0 LANGUAGES C)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" RELAYDX_VERSION
+    LIMIT_COUNT 1)
+string(STRIP "${RELAYDX_VERSION}" RELAYDX_VERSION)
+if(NOT RELAYDX_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR "Invalid version in version.txt: ${RELAYDX_VERSION}")
+endif()
+project(relaydx VERSION "${RELAYDX_VERSION}" LANGUAGES C)
 
 option(RELAYDX_BUILD_EXECUTABLE "Build the Linux relaydx executable" ON)
 

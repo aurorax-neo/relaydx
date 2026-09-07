@@ -31,17 +31,48 @@ cmake --build --preset linux-release
 sudo cmake --install cmake-build-linux --prefix /usr
 ```
 
-## 发布
+## 发布包
 
-在 Linux 上本地创建发布压缩包和 SHA256 校验文件：
+下载与架构匹配的压缩包，校验、解压并运行包内安装脚本：
 
 ```sh
-./scripts/release.sh v0.1.0
+sha256sum -c relaydx-0.1.0-linux-amd64.tar.gz.sha256
+tar -xzf relaydx-0.1.0-linux-amd64.tar.gz
+cd relaydx-0.1.0-linux-amd64
+sudo ./install.sh
+sudo editor /etc/default/relaydx
+sudo systemctl enable --now relaydx
 ```
 
-推送匹配 `v*` 的 tag 会触发 `.github/workflows/release.yml`，自动构建
-amd64 和 arm64 包、校验 SHA256 并创建 GitHub Release。也可以在 GitHub
-Actions 页面手动运行 workflow 并填写发布 tag。
+每个压缩包只有一个顶层目录，内部为简单的平铺结构：
+
+```text
+relaydx-0.1.0-linux-amd64/
+├── relaydx
+├── relaydx.service
+├── relaydx.default
+├── install.sh
+├── uninstall.sh
+├── version.txt
+├── README.md
+├── README.zh.md
+├── LICENSE
+└── THIRD_PARTY_NOTICES.md
+```
+
+`install.sh` 将程序安装到 `/usr/sbin/relaydx`，将服务单元安装到
+`/etc/systemd/system/relaydx.service`，并在首次安装时创建
+`/etc/default/relaydx`。已有配置不会被覆盖。使用
+`sudo ./uninstall.sh` 卸载程序；添加 `--purge` 可同时删除配置。
+
+维护者可直接根据 `version.txt` 构建发布包：
+
+```sh
+./scripts/release.sh
+```
+
+推送与版本匹配的 `v*` tag 会触发 `.github/workflows/release.yml`，自动
+构建 amd64 和 arm64 包、校验 SHA256 并创建 GitHub Release。
 
 ## 快速开始
 
@@ -405,7 +436,7 @@ DHCPv6 服务器：租约状态文件，以及可选的更新回调。
 
 #### `-d`, `--daemon`
 
-调用 `daemon(0, 0)` 转入后台，并写入 PID 文件。随仓库提供的 systemd 单元是 `Type=simple`，**不要**再加 `-d`。
+调用 `daemon(0, 0)` 转入后台，并写入 PID 文件。随仓库提供的 systemd 单元是 `Type=notify`，**不要**再加 `-d`。
 
 #### `-p`, `--pidfile FILE`
 
@@ -449,19 +480,26 @@ PID 文件路径。默认 `/var/run/relaydx.pid`。仅在使用 `-d` 时写入�
 
 ## systemd
 
-示例单元在 `contrib/relaydx.service` 和 `contrib/relaydx.default`。以上游 `wls224`、下游 `ens256` 为例：
+发布压缩包已包含 `install.sh`、`relaydx.service` 和 `relaydx.default`。
+按 **发布包** 一节安装后，先编辑 `/etc/default/relaydx` 中的
+`RELAYDX_OPTIONS`，再启动服务。
+
+若从源码目录安装，则先构建并安装程序，再安装两个集成文件：
 
 ```sh
+sudo cmake --install cmake-build-linux --prefix /usr
 sudo install -m 0644 contrib/relaydx.service /etc/systemd/system/relaydx.service
 sudo install -m 0644 contrib/relaydx.default /etc/default/relaydx
 sudo systemctl daemon-reload
+sudo editor /etc/default/relaydx
 sudo systemctl enable --now relaydx
 sudo systemctl status relaydx
 ```
 
-在 `/etc/default/relaydx` 中编辑 `RELAYDX_OPTIONS`。不要加 `-d`，该单元是
-`Type=simple`。不需要 `BindsTo=`、轮询接口的 `ExecStartPre`、NetworkManager
-dispatcher 或 `post-up` 重启钩子。服务的 `Restart=on-failure` 只用于真正的进程失败。
+不要加 `-d`；该单元是 `Type=notify`，由 systemd 监控前台进程。不需要
+`BindsTo=`、轮询接口的 `ExecStartPre`、NetworkManager dispatcher 或
+`post-up` 重启钩子。服务使用 systemd watchdog，`Restart=on-failure` 只用于
+真正的进程失败。
 
 ## 许可
 

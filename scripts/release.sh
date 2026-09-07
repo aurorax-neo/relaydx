@@ -11,7 +11,7 @@ if [[ ! -f "$version_file" ]]; then
     exit 1
 fi
 file_version=$(head -n 1 "$version_file" | tr -d '[:space:]')
-if [[ ! "$file_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+if [[ ! "$file_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     printf 'Invalid version.txt value: %s\n' "$file_version" >&2
     exit 1
 fi
@@ -35,10 +35,12 @@ esac
 build_dir="$root_dir/build-release"
 stage_dir="$root_dir/.release-stage"
 dist_dir="$root_dir/dist"
-archive="relaydx-${version}-linux-${archive_arch}.tar.gz"
+package_name="relaydx-${version}-linux-${archive_arch}"
+package_dir="$stage_dir/$package_name"
+archive="$package_name.tar.gz"
 
 rm -rf "$build_dir" "$stage_dir"
-mkdir -p "$dist_dir"
+mkdir -p "$dist_dir" "$package_dir"
 cmake -S "$root_dir" -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DRELAYDX_BUILD_EXECUTABLE=ON \
@@ -46,15 +48,19 @@ cmake -S "$root_dir" -B "$build_dir" \
 cmake --build "$build_dir" --parallel
 ctest --test-dir "$build_dir" --output-on-failure
 
-DESTDIR="$stage_dir" cmake --install "$build_dir" --prefix /usr
-mkdir -p "$stage_dir/usr/share/doc/relaydx" "$stage_dir/etc/systemd/system" 
-cp "$root_dir/LICENSE" "$root_dir/README.md" \
-    "$root_dir/THIRD_PARTY_NOTICES.md" "$stage_dir/usr/share/doc/relaydx/"
-cp "$root_dir/contrib/relaydx.service" "$stage_dir/etc/systemd/system/"
-cp "$root_dir/contrib/relaydx.default" "$stage_dir/usr/share/doc/relaydx/"
+install -m 0755 "$build_dir/relaydx" "$package_dir/relaydx"
+install -m 0755 "$root_dir/scripts/install.sh" "$package_dir/install.sh"
+install -m 0755 "$root_dir/scripts/uninstall.sh" "$package_dir/uninstall.sh"
+install -m 0644 "$root_dir/contrib/relaydx.service" \
+    "$package_dir/relaydx.service"
+install -m 0644 "$root_dir/contrib/relaydx.default" \
+    "$package_dir/relaydx.default"
+install -m 0644 "$root_dir/version.txt" "$package_dir/version.txt"
+install -m 0644 "$root_dir/LICENSE" "$root_dir/README.md" \
+    "$root_dir/README.zh.md" "$root_dir/THIRD_PARTY_NOTICES.md" "$package_dir/"
 
 rm -f "$dist_dir/$archive" "$dist_dir/$archive.sha256"
-tar -C "$stage_dir" -czf "$dist_dir/$archive" .
+tar -C "$stage_dir" -czf "$dist_dir/$archive" "$package_name"
 (
     cd "$dist_dir"
     sha256sum "$archive" > "$archive.sha256"
