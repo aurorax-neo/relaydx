@@ -337,10 +337,11 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/relaydx
+          flavor: |
+            latest=false
           tags: |
             type=raw,value=${{ needs.validate-release.outputs.tag }}
             type=semver,pattern={{version}},value=${{ needs.validate-release.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release.outputs.tag }}
             type=raw,value=latest,enable=${{ needs.validate-release.outputs.prerelease != 'true' }}
 
       - name: Build and push multi-arch image
