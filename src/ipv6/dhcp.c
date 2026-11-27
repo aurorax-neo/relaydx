@@ -57,9 +57,11 @@ int init_dhcpv6_relay(const struct relayd_config *relayd_config)
 		return -1;
 	}
 
-	if (dhcpv6_init_ia(relayd_config, dhcpv6_event.socket) < 0)
-		goto error;
-	ia_initialized = true;
+	if (config->enable_dhcpv6_server) {
+		if (dhcpv6_init_ia(relayd_config, dhcpv6_event.socket) < 0)
+			goto error;
+		ia_initialized = true;
+	}
 
 
 	// Configure multicast settings
@@ -298,22 +300,17 @@ static void handle_client_request(void *addr, void *data, size_t len,
 			return;
 	}
 
-	if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
-		dnsaddr.addr = config->dnsaddr;
+	struct in6_addr resolved_dns;
+	if (relayd_get_interface_dns_address(config, iface, &resolved_dns) == 0) {
+		dnsaddr.addr = resolved_dns;
 		iov[2].iov_len = sizeof(dnsaddr);
-	} else {
-		struct relayd_ipaddr ipaddr;
-		if (relayd_get_interface_addresses(iface->ifindex, &ipaddr, 1) == 1) {
-			dnsaddr.addr = ipaddr.addr;
-			iov[2].iov_len = sizeof(dnsaddr);
-		}
 	}
 
 	if (iov[0].iov_len > 0) // Update length
 		update_nested_message(data, len, iov[1].iov_len + iov[2].iov_len +
 				iov[3].iov_len + iov[4].iov_len - (4 + opts_end - opts));
 
-	relayd_forward_packet(dhcpv6_event.socket, addr, iov, 5, iface);
+	relayd_forward_packet(dhcpv6_event.socket, addr, iov, 6, iface);
 }
 
 
@@ -368,45 +365,42 @@ static void relay_server_response(uint8_t *data, size_t len)
 		return;
 
 	bool is_authenticated = false;
-	struct in6_addr *dns_ptr = NULL;
-	size_t dns_count = 0;
+	bool has_dns_servers = false;
 
 	// If the payload is relay-reply we have to send to the server port
 	if (payload_data[0] == DHCPV6_MSG_RELAY_REPL) {
 		target.sin6_port = htons(DHCPV6_SERVER_PORT);
 	} else { // Go through the payload data
-		struct dhcpv6_client_header *h = (void*)payload_data;
+		struct dhcpv6_client_header *ch = (void *)payload_data;
 		end = payload_data + payload_len;
 
-		dhcpv6_for_each_option(&h[1], end, otype, olen, odata) {
-			if (otype == DHCPV6_OPT_DNS_SERVERS && olen >= 16) {
-				dns_ptr = (struct in6_addr*)odata;
-				dns_count = olen / 16;
+		dhcpv6_for_each_option(&ch[1], end, otype, olen, odata) {
+			if (otype == DHCPV6_OPT_DNS_SERVERS && olen >= 16 &&
+					(olen % 16) == 0) {
+				has_dns_servers = true;
 			} else if (otype == DHCPV6_OPT_AUTH) {
 				is_authenticated = true;
 			}
 		}
 	}
 
-	// Rewrite DNS servers if requested
-	if (config->always_rewrite_dns && dns_ptr && dns_count > 0) {
-		if (is_authenticated)
-			return; // Impossible to rewrite
+	// Rewrite DNS servers if requested (leave authenticated replies untouched)
+	if (config->always_rewrite_dns && has_dns_servers && !is_authenticated) {
+		struct in6_addr rewrite;
 
-		struct relayd_ipaddr ip;
-		const struct in6_addr *rewrite;
+		if (relayd_get_interface_dns_address(config, iface, &rewrite) == 0) {
+			struct dhcpv6_client_header *ch = (void *)payload_data;
+			end = payload_data + payload_len;
 
-		if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
-			rewrite = &config->dnsaddr;
-		} else {
-			if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) < 1)
-				return; // Unable to get interface address
-			rewrite = &ip.addr;
+			dhcpv6_for_each_option(&ch[1], end, otype, olen, odata) {
+				if (otype == DHCPV6_OPT_DNS_SERVERS && olen >= 16 &&
+						(olen % 16) == 0) {
+					size_t count = (size_t)olen / 16;
+					for (size_t i = 0; i < count; ++i)
+						memcpy(odata + i * 16, &rewrite, sizeof(rewrite));
+				}
+			}
 		}
-
-		// Copy over any other addresses
-		for (size_t i = 0; i < dns_count; ++i)
-			memcpy(&dns_ptr[i], rewrite, sizeof(*rewrite));
 	}
 
 	struct iovec iov = {payload_data, payload_len};
@@ -452,23 +446,20 @@ static void relay_client_request(struct sockaddr_in6 *source,
 	memcpy(&hdr.peer_address, &source->sin6_addr, sizeof(struct in6_addr));
 	memcpy(&hdr.interface_id_data, &ifindex, sizeof(ifindex));
 
-	// Detect public IP of slave interface to use as link-address
+	/*
+	 * Prefer global/ULA address of the ingress slave interface as link-address,
+	 * fall back to master's global/ULA address, and otherwise leave link-address
+	 * unspecified (::) per RFC 8415 Section 19.1.1 alongside Interface-Id.
+	 */
 	struct relayd_ipaddr ip;
-	if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) < 1) {
-		// No suitable address! Is the slave not configured yet?
-		// Detect public IP of master interface and use it instead
-		// This is WRONG and probably violates the RFC. However
-		// otherwise we have a hen and egg problem because the
-		// slave-interface cannot be auto-configured.
-		if (relayd_get_interface_addresses(config->master.ifindex,
-				&ip, 1) < 1)
-			return; // Could not obtain a suitable address
+	if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) >= 1 ||
+			relayd_get_interface_addresses(config->master.ifindex, &ip, 1) >= 1) {
+		memcpy(&hdr.link_address, &ip.addr, sizeof(hdr.link_address));
 	}
-	memcpy(&hdr.link_address, &ip.addr, sizeof(hdr.link_address));
 
-	struct sockaddr_in6 dhcpv6_servers = {AF_INET6,
-			htons(DHCPV6_SERVER_PORT), 0, ALL_DHCPV6_SERVERS, 0};
+	struct sockaddr_in6 dhcpv6_relays = {AF_INET6,
+			htons(DHCPV6_SERVER_PORT), 0, ALL_DHCPV6_RELAYS, 0};
 	struct iovec iov[2] = {{&hdr, sizeof(hdr)}, {(void*)data, len}};
-	relayd_forward_packet(dhcpv6_event.socket, &dhcpv6_servers,
+	relayd_forward_packet(dhcpv6_event.socket, &dhcpv6_relays,
 			iov, 2, &config->master);
 }

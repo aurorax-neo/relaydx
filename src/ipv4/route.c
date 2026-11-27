@@ -32,6 +32,7 @@
 
 static struct uloop_fd rtnl_sock = {.fd = -1};
 static unsigned int rtnl_seq, rtnl_dump_seq;
+static bool local_addr_route_added;
 int route_table = 16800;
 
 static void rtnl_flush(void)
@@ -47,6 +48,56 @@ static void rtnl_flush(void)
 	if (ret != 2)
 		perror("write");
 	close(fd);
+}
+
+static void rtnl_local_addr_route(bool add)
+{
+	int lo_ifindex = (int)if_nametoindex("lo");
+	struct {
+		struct nlmsghdr nl;
+		struct rtmsg rt;
+		struct {
+			struct rtattr rta;
+			int table;
+		} __packed table;
+		struct {
+			struct rtattr rta;
+			int ifindex;
+		} __packed dev;
+		struct {
+			struct rtattr rta;
+			uint8_t ipaddr[4];
+		} __packed dst;
+	} __packed req = {
+		.nl = {
+			.nlmsg_len = sizeof(req),
+			.nlmsg_type = add ? RTM_NEWROUTE : RTM_DELROUTE,
+			.nlmsg_flags = NLM_F_REQUEST | (add ? (NLM_F_CREATE | NLM_F_EXCL) : 0),
+		},
+		.rt = {
+			.rtm_family = AF_INET,
+			.rtm_dst_len = 32,
+			.rtm_table = RT_TABLE_LOCAL,
+			.rtm_protocol = RTPROT_BOOT,
+			.rtm_scope = add ? RT_SCOPE_HOST : RT_SCOPE_NOWHERE,
+			.rtm_type = RTN_LOCAL,
+		},
+		.table = {
+			.rta = {.rta_type = RTA_TABLE, .rta_len = sizeof(req.table)},
+			.table = RT_TABLE_LOCAL,
+		},
+		.dev = {
+			.rta = {.rta_type = RTA_OIF, .rta_len = sizeof(req.dev)},
+			.ifindex = lo_ifindex > 0 ? lo_ifindex : 1,
+		},
+		.dst = {
+			.rta = {.rta_type = RTA_DST, .rta_len = sizeof(req.dst)},
+		},
+	};
+
+	memcpy(req.dst.ipaddr, local_addr, sizeof(req.dst.ipaddr));
+	send(rtnl_sock.fd, &req, sizeof(req), 0);
+	rtnl_flush();
 }
 
 enum {
@@ -187,11 +238,11 @@ rtnl_route_request(struct relayd_interface *rif, struct relayd_host *host,
 	req.table.table = get_route_table(rif);
 
 	req.nl.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.rt.rtm_protocol = RTPROT_BOOT;
 	if (add) {
 		req.nl.nlmsg_type = RTM_NEWROUTE;
 		req.nl.nlmsg_flags |= NLM_F_CREATE | NLM_F_REPLACE;
 
-		req.rt.rtm_protocol = RTPROT_BOOT;
 		if (route) {
 			req.rt.rtm_scope = RT_SCOPE_UNIVERSE;
 		} else {
@@ -201,23 +252,24 @@ rtnl_route_request(struct relayd_interface *rif, struct relayd_host *host,
 	} else {
 		req.nl.nlmsg_type = RTM_DELROUTE;
 		req.rt.rtm_scope = RT_SCOPE_NOWHERE;
+		req.rt.rtm_type = RTN_UNSPEC;
 	}
 
 	if (rif)
 		ifname = rif->ifname;
 
 	if (route) {
-		DPRINTF(2, "%s: add route to "IP_FMT"/%d via "IP_FMT" (%s)\n", ifname,
-			IP_BUF(route->dest), route->mask, IP_BUF(host->ipaddr),
-			host->rif->ifname);
+		DPRINTF(2, "%s: %s route to "IP_FMT"/%d via "IP_FMT" (%s)\n", ifname,
+			add ? "add" : "del", IP_BUF(route->dest), route->mask,
+			IP_BUF(host->ipaddr), host->rif->ifname);
 
 		req.rt.rtm_dst_len = route->mask;
 		if (route->mask)
 			addr = rtnl_add_addr(addr, &pktlen, RTA_DST, route->dest);
 		addr = rtnl_add_addr(addr, &pktlen, RTA_GATEWAY, host->ipaddr);
 	} else {
-		DPRINTF(2, "%s: add host route to "IP_FMT" (%s)\n", ifname,
-			IP_BUF(host->ipaddr), host->rif->ifname);
+		DPRINTF(2, "%s: %s host route to "IP_FMT" (%s)\n", ifname,
+			add ? "add" : "del", IP_BUF(host->ipaddr), host->rif->ifname);
 		addr = rtnl_add_addr(addr, &pktlen, RTA_DST, host->ipaddr);
 		req.rt.rtm_dst_len = 32;
 	}
@@ -279,7 +331,7 @@ static void rtnl_parse_newneigh(struct nlmsghdr *h)
 		return;
 
 	list_for_each_entry(rif, &interfaces, list) {
-		if (rif->sll.sll_ifindex == r->ndm_ifindex)
+		if (rif->ifindex == r->ndm_ifindex)
 			goto found_interface;
 	}
 	return;
@@ -299,7 +351,8 @@ found_interface:
 		}
 	}
 
-	if (!lladdr || !ipaddr || (r->ndm_state & (NUD_INCOMPLETE|NUD_FAILED)))
+	if (!lladdr || !ipaddr ||
+			(r->ndm_state & (NUD_INCOMPLETE | NUD_FAILED | NUD_NOARP)))
 		return;
 
 	if (!memcmp(lladdr, "\x00\x00\x00\x00\x00\x00", ETH_ALEN))
@@ -421,8 +474,12 @@ int relayd_rtnl_init(void)
 	rtnl_seq = time(NULL);
 	rtnl_dump_seq = rtnl_seq;
 	rtnl_dump_request(RTM_GETNEIGH);
-	if (local_route_table)
+	local_addr_route_added = false;
+	if (local_route_table) {
+		rtnl_local_addr_route(true);
+		local_addr_route_added = true;
 		rtnl_rule_request(NULL, RULE_F_ADD);
+	}
 
 	return 0;
 }
@@ -431,8 +488,13 @@ void relayd_rtnl_done(void)
 {
 	if (rtnl_sock.fd < 0)
 		return;
-	if (local_route_table)
+	if (local_route_table) {
 		rtnl_rule_request(NULL, 0);
+		if (local_addr_route_added) {
+			rtnl_local_addr_route(false);
+			local_addr_route_added = false;
+		}
+	}
 	if (rtnl_sock.registered)
 		uloop_fd_delete(&rtnl_sock);
 	close(rtnl_sock.fd);

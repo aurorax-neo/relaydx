@@ -235,6 +235,14 @@ void deinit_ndp_proxy(void)
 }
 
 
+static time_t ndp_monotonic_time(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec;
+}
+
 // Send an ICMP-ECHO. This is less for actually pinging but for the
 // neighbor cache to be kept up-to-date.
 static ssize_t ping6(struct in6_addr *addr,
@@ -246,7 +254,7 @@ static ssize_t ping6(struct in6_addr *addr,
 
 	// Linux seems to not honor IPV6_PKTINFO on raw-sockets, so work around
 	setsockopt(ping_socket, SOL_SOCKET, SO_BINDTODEVICE,
-			iface->ifname, sizeof(iface->ifname));
+			iface->ifname, strlen(iface->ifname) + 1);
 	return relayd_forward_packet(ping_socket, &dest, &iov, 1, iface);
 }
 
@@ -290,7 +298,7 @@ static void handle_solicit(void *addr, void *data, size_t len,
 			ll->sll_pkttype != PACKET_OUTGOING)
 		return; // Looped back
 
-	time_t now = time(NULL);
+	time_t now = ndp_monotonic_time();
 
 	struct ndp_neighbor *n = find_neighbor(&req->nd_ns_target, false);
 	if (n && (n->iface || labs(n->timeout - now) < 5)) {
@@ -323,7 +331,7 @@ static void handle_solicit(void *addr, void *data, size_t len,
 
 		// Linux seems to not honor IPV6_PKTINFO on raw-sockets, so work around
 		setsockopt(ping_socket, SOL_SOCKET, SO_BINDTODEVICE,
-					iface->ifname, sizeof(iface->ifname));
+					iface->ifname, strlen(iface->ifname) + 1);
 		struct iovec iov = {&advert, sizeof(advert)};
 		relayd_forward_packet(ping_socket, &dest, &iov, 1, iface);
 	} else {
@@ -450,7 +458,7 @@ static bool match_neighbor(struct ndp_neighbor *n, struct in6_addr *addr)
 
 static struct ndp_neighbor* find_neighbor(struct in6_addr *addr, bool strict)
 {
-	time_t now = time(NULL);
+	time_t now = ndp_monotonic_time();
 	struct ndp_neighbor *n, *e;
 	list_for_each_entry_safe(n, e, &neighbors, head) {
 		if ((!strict && match_neighbor(n, addr)) ||
@@ -484,13 +492,13 @@ static void modify_neighbor(struct in6_addr *addr,
 		n->addr = *addr;
 		n->iface = iface;
 		if (!n->iface)
-			time(&n->timeout);
+			n->timeout = ndp_monotonic_time();
 		list_add(&n->head, &neighbors);
 		++neighbor_count;
 		setup_route(addr, n->iface, add);
 	} else if (n->iface == iface) {
 		if (!n->iface)
-			time(&n->timeout);
+			n->timeout = ndp_monotonic_time();
 	} else if (iface && (!n->iface ||
 			(!iface->external && n->iface->external))) {
 		setup_route(addr, n->iface, false);

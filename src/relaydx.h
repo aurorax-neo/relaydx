@@ -188,6 +188,8 @@ ssize_t relayd_forward_packet(int socket, struct sockaddr_in6 *dest,
 		const struct relayd_interface *iface);
 ssize_t relayd_get_interface_addresses(int ifindex,
 		struct relayd_ipaddr *addrs, size_t cnt);
+int relayd_get_interface_dns_address(const struct relayd_config *config,
+		const struct relayd_interface *iface, struct in6_addr *out);
 struct relayd_interface *relayd_get_interface_by_name(const char *name);
 struct relayd_interface *relayd_get_interface_by_index(int ifindex);
 int relayd_get_interface_mtu(const char *ifname);
@@ -231,6 +233,7 @@ void relayd_add_pending_route(const uint8_t *gateway, const uint8_t *dest,
 		uint8_t mask, int timeout);
 void relayd_forward_bcast_packet(struct relayd_interface *from_rif,
 		void *packet, int len);
+void relayd_fixup_bcast_udp_checksum(void *data, int len);
 bool relayd_handle_dhcp_packet(struct relayd_interface *rif, void *data,
 		int len, bool forward, bool parse);
 

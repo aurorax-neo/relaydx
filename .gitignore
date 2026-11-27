@@ -17,8 +17,13 @@ cmake-build-debug
 cmake-build-index
 cmake-build-release
 build-release
+build-san
 .release-stage
 dist
+docker-bin/
+release-packages/
+stage-*/
+RELEASE_BODY.md
 
 # CLion
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

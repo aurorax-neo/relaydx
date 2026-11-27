@@ -29,7 +29,42 @@
 #include <signal.h>
 #include <string.h>
 
+#include <linux/filter.h>
+
 #include "relaydx.h"
+
+#ifndef SKF_AD_OFF
+#define SKF_AD_OFF (-0x1000)
+#endif
+#ifndef SKF_AD_PKTTYPE
+#define SKF_AD_PKTTYPE 4
+#endif
+
+static struct sock_filter bcast_bpf[] = {
+	/* Drop frames transmitted by this host/relay (PACKET_OUTGOING). */
+	BPF_STMT(BPF_LD | BPF_W | BPF_ABS, SKF_AD_OFF + SKF_AD_PKTTYPE),
+	BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, PACKET_OUTGOING, 3, 0),
+	/* Accept only L2 broadcast/multicast frames (dest MAC LSB == 1). */
+	BPF_STMT(BPF_LD | BPF_B | BPF_ABS, 0),
+	BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x01, 0, 1),
+	BPF_STMT(BPF_RET | BPF_K, 0xffffffff),
+	BPF_STMT(BPF_RET | BPF_K, 0),
+};
+static const struct sock_fprog bcast_bpf_prog = {
+	ARRAY_SIZE(bcast_bpf),
+	bcast_bpf,
+};
+
+static bool ipv4_is_valid_host(const uint8_t ip[4])
+{
+	return ip[0] != 0 && ip[0] != 127 && ip[0] < 224;
+}
+
+static bool mac_is_valid_unicast(const uint8_t mac[ETH_ALEN])
+{
+	return (mac[0] & 0x01) == 0 &&
+			memcmp(mac, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) != 0;
+}
 
 static LIST_HEAD(pending_routes);
 static size_t pending_route_count;
@@ -344,6 +379,9 @@ struct relayd_host *relayd_refresh_host(struct relayd_interface *rif, const uint
 {
 	struct relayd_host *host;
 
+	if (!ipv4_is_valid_host(ipaddr) || !mac_is_valid_unicast(lladdr))
+		return NULL;
+
 	host = find_host_by_ipaddr(rif, ipaddr);
 	if (!host) {
 		host = find_host_by_ipaddr(NULL, ipaddr);
@@ -404,17 +442,26 @@ static void recv_arp_request(struct relayd_interface *rif, struct arp_packet *pk
 		IP_BUF(pkt->arp.arp_spa),
 		MAC_BUF(pkt->eth.ether_shost));
 
-	if (!memcmp(pkt->arp.arp_spa, "\x00\x00\x00\x00", 4))
+	if (!memcmp(pkt->eth.ether_shost, rif->sll.sll_addr, ETH_ALEN) ||
+			!ipv4_is_valid_host(pkt->arp.arp_tpa))
 		return;
 
-	host = find_host_by_ipaddr(NULL, pkt->arp.arp_spa);
-	if (!host || host->rif != rif)
-		relayd_refresh_host(rif, pkt->eth.ether_shost, pkt->arp.arp_spa);
+	if (ipv4_is_valid_host(pkt->arp.arp_spa)) {
+		host = find_host_by_ipaddr(NULL, pkt->arp.arp_spa);
+		if (!host || host->rif != rif)
+			relayd_refresh_host(rif, pkt->eth.ether_shost, pkt->arp.arp_spa);
+	}
 
 	if (local_route_table && !memcmp(pkt->arp.arp_tpa, local_addr, sizeof(local_addr))) {
-		send_arp_reply(rif, local_addr, pkt->arp.arp_sha, pkt->arp.arp_spa);
+		if (ipv4_is_valid_host(pkt->arp.arp_spa))
+			send_arp_reply(rif, local_addr, pkt->arp.arp_sha, pkt->arp.arp_spa);
+		else if (!memcmp(pkt->arp.arp_spa, "\x00\x00\x00\x00", 4))
+			send_arp_reply(rif, local_addr, NULL, local_addr);
 		return;
 	}
+
+	if (!ipv4_is_valid_host(pkt->arp.arp_spa))
+		return;
 
 	host = find_host_by_ipaddr(NULL, pkt->arp.arp_tpa);
 
@@ -440,8 +487,15 @@ static void recv_arp_reply(struct relayd_interface *rif, struct arp_packet *pkt)
 		MAC_BUF(pkt->eth.ether_shost),
 		IP_BUF(pkt->arp.arp_tpa));
 
+	if (!memcmp(pkt->eth.ether_shost, rif->sll.sll_addr, ETH_ALEN))
+		return;
+
 	if (memcmp(pkt->arp.arp_sha, rif->sll.sll_addr, ETH_ALEN) != 0)
 		relayd_refresh_host(rif, pkt->arp.arp_sha, pkt->arp.arp_spa);
+
+	if (!ipv4_is_valid_host(pkt->arp.arp_spa) ||
+			!ipv4_is_valid_host(pkt->arp.arp_tpa))
+		return;
 
 	host = find_host_by_ipaddr(NULL, pkt->arp.arp_tpa);
 	if (!host)
@@ -463,10 +517,14 @@ static void recv_packet(struct uloop_fd *fd, unsigned int events)
 	int pktlen;
 
 	do {
+		struct sockaddr_ll sll;
+		socklen_t sll_len = sizeof(sll);
+
 		if (rif->fd.error)
 			uloop_end();
 
-		pktlen = recv(rif->fd.fd, pktbuf, sizeof(pktbuf), 0);
+		pktlen = recvfrom(rif->fd.fd, pktbuf, sizeof(pktbuf), 0,
+				(struct sockaddr *)&sll, &sll_len);
 		if (pktlen < 0) {
 			if (errno == EINTR)
 				continue;
@@ -477,7 +535,8 @@ static void recv_packet(struct uloop_fd *fd, unsigned int events)
 		if (!pktlen)
 			break;
 
-		if (pktlen < (int)sizeof(*pkt))
+		if (sll.sll_pkttype == PACKET_OUTGOING ||
+				pktlen < (int)sizeof(*pkt))
 			continue;
 		pkt = (void *)pktbuf;
 		if (pkt->eth.ether_type != htons(ETHERTYPE_ARP) ||
@@ -517,10 +576,15 @@ static void recv_bcast_packet(struct uloop_fd *fd, unsigned int events)
 	int pktlen;
 
 	do {
-		if (rif->fd.error)
+		struct sockaddr_ll sll;
+		socklen_t sll_len = sizeof(sll);
+		struct ether_header *eth;
+
+		if (rif->bcast_fd.error)
 			uloop_end();
 
-		pktlen = recv(rif->bcast_fd.fd, pktbuf, sizeof(pktbuf), 0);
+		pktlen = recvfrom(rif->bcast_fd.fd, pktbuf, sizeof(pktbuf), 0,
+				(struct sockaddr *)&sll, &sll_len);
 		if (pktlen < 0) {
 			if (errno == EINTR)
 				continue;
@@ -534,11 +598,22 @@ static void recv_bcast_packet(struct uloop_fd *fd, unsigned int events)
 		if (!forward_bcast && !forward_dhcp)
 			continue;
 
+		if (sll.sll_pkttype == PACKET_OUTGOING ||
+				pktlen < (int)sizeof(*eth))
+			continue;
+
+		eth = (struct ether_header *)pktbuf;
+		if (!memcmp(eth->ether_shost, rif->sll.sll_addr, ETH_ALEN))
+			continue;
+
 		if (relayd_handle_dhcp_packet(rif, pktbuf, pktlen, forward_dhcp, parse_dhcp))
 			continue;
 
-		if (forward_bcast)
+		if (forward_bcast && sll.sll_pkttype == PACKET_BROADCAST &&
+				!memcmp(eth->ether_dhost, "\xff\xff\xff\xff\xff\xff", ETH_ALEN)) {
+			relayd_fixup_bcast_udp_checksum(pktbuf, pktlen);
 			relayd_forward_bcast_packet(rif, pktbuf, pktlen);
+		}
 	} while (1);
 }
 
@@ -613,15 +688,16 @@ static int init_interface(struct relayd_interface *rif)
 	sll = &rif->bcast_sll;
 	sll->sll_protocol = htons(ETH_P_IP);
 
-	if (bind(fd, (struct sockaddr *)sll, sizeof(struct sockaddr_ll)) < 0) {
-		perror("bind(ETH_P_IP)");
-		return -1;
-	}
-
+	setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, &bcast_bpf_prog,
+			sizeof(bcast_bpf_prog));
 #ifdef PACKET_RECV_TYPE
 	pkt_type = (1 << PACKET_BROADCAST) | (1 << PACKET_MULTICAST);
 	setsockopt(fd, SOL_PACKET, PACKET_RECV_TYPE, &pkt_type, sizeof(pkt_type));
 #endif
+	if (bind(fd, (struct sockaddr *)sll, sizeof(struct sockaddr_ll)) < 0) {
+		perror("bind(ETH_P_IP)");
+		return -1;
+	}
 
 	if (uloop_fd_add(&rif->bcast_fd,
 			ULOOP_READ | ULOOP_EDGE_TRIGGER) < 0)

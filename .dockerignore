@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+refer
+tests
+build
+build-*
+cmake-build-*
+dist
+release-packages
+stage-*
+RELEASE_BODY.md
+*.md
+!README.md

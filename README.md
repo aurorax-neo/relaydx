@@ -39,7 +39,7 @@ Official release binaries are fully static musl builds, so they do not require
 a particular glibc version. For x86-64 Linux, download and install with:
 
 ```sh
-VERSION=v0.1.4
+VERSION=v0.1.5
 TARGET=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
@@ -60,7 +60,7 @@ TARGET=aarch64-unknown-linux-musl
 Each archive has one top-level directory with a flat layout:
 
 ```text
-relaydx-v0.1.4-x86_64-unknown-linux-musl/
+relaydx-v0.1.5-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
@@ -68,6 +68,7 @@ relaydx-v0.1.4-x86_64-unknown-linux-musl/
 ├── uninstall.sh
 ├── update.sh
 ├── version.txt
+├── CHANGELOG.md
 ├── README.md
 ├── README.zh.md
 ├── LICENSE
@@ -92,7 +93,7 @@ sudo relaydx-update
 Install a specific release:
 
 ```sh
-sudo relaydx-update v0.1.4
+sudo relaydx-update v0.1.5
 ```
 
 If GitHub is slow or blocked, use a download mirror that prefixes GitHub URLs,
@@ -100,7 +101,7 @@ such as `https://ghfast.top`:
 
 ```sh
 sudo relaydx-update --mirror https://ghfast.top
-sudo RELAYDX_GITHUB_MIRROR=https://ghfast.top relaydx-update v0.1.4
+sudo RELAYDX_GITHUB_MIRROR=https://ghfast.top relaydx-update v0.1.5
 ```
 
 The same variable can be stored in `/etc/default/relaydx`:
@@ -122,11 +123,64 @@ If the requested version is already installed, it exits successfully without
 downloading or restarting anything. The updater requires `curl`, `sha256sum`,
 `tar`, and valid system CA certificates.
 
-Pushing a tag matching `version.txt` (for example `v0.1.4`) starts
-`.github/workflows/release.yml`. The workflow builds, statically verifies,
-packages, checksums, and publishes both target archives. If a GitHub Release
-with the same version already exists, the workflow skips the build and publish
-jobs.
+Pushing a SemVer tag matching `version.txt` with a non-empty section in
+`CHANGELOG.md` (for example `v0.1.5`) starts `.github/workflows/release.yml`.
+The workflow validates release metadata, builds and statically verifies both
+musl target archives, generates SHA256 checksums (`*.sha256` and
+`checksums.txt`), publishes the GitHub Release, and pushes a zero-QEMU
+multi-arch (`linux/amd64`, `linux/arm64`) image to GHCR. If both archives are
+already attached to the GitHub Release and `force_build` is not set, the
+workflow syncs the `CHANGELOG.md` notes and skips rebuilding.
+
+## Docker deployment
+
+Multi-architecture (`linux/amd64`, `linux/arm64`) container images built from
+static musl binaries on `alpine:3.21` are published to GitHub Container
+Registry:
+
+```sh
+docker pull ghcr.io/aurorax-neo/relaydx:latest
+```
+
+Because `relaydx` operates directly on host L2/L3 interfaces (`AF_PACKET`) and
+kernel policy routing tables (`NETLINK_ROUTE`), run the container on a Linux
+host with `--network host` and `NET_ADMIN` + `NET_RAW` capabilities:
+
+```sh
+docker run -d --name relaydx \
+    --restart unless-stopped \
+    --network host \
+    --cap-add NET_ADMIN \
+    --cap-add NET_RAW \
+    -v /proc/sys/net:/proc/sys/net:rw \
+    ghcr.io/aurorax-neo/relaydx:latest \
+    -4 -6 -M wan0 -I wan0 -I lan0 --broadcast4 --dhcp4
+```
+
+If `/proc/sys` must remain read-only inside the container, configure the
+forwarding sysctls on the host (see **Required kernel and firewall
+configuration**) and append `--no-forwarding-setup`:
+
+```sh
+docker run -d --name relaydx \
+    --restart unless-stopped \
+    --network host \
+    --cap-add NET_ADMIN \
+    --cap-add NET_RAW \
+    ghcr.io/aurorax-neo/relaydx:latest \
+    -4 -6 -M wan0 -I wan0 -I lan0 --broadcast4 --dhcp4 --no-forwarding-setup
+```
+
+For Docker Compose or local source builds, edit the interface names in
+`compose.yaml` and run:
+
+```sh
+# Pull the prebuilt GHCR image:
+docker compose up -d
+
+# Or build locally from source via Dockerfile:
+docker compose up -d --build
+```
 
 ## Quick start
 
@@ -322,7 +376,11 @@ Several of these options imply `-4`.
 
 Forward IPv4 broadcasts between the listed interfaces. Implies `-4`.
 
-Without this flag, only ARP (and optionally DHCP) is relayed.
+Attaches a kernel BPF filter (`SO_ATTACH_FILTER`) to capture only L2
+broadcast/multicast frames (avoiding unicast traffic copies into userspace) and
+finalizes `CHECKSUM_PARTIAL` UDP checksums on virtual or bridged interfaces
+(`veth`, `virtio-net`, `br-lan`). Without this flag, only ARP (and optionally
+DHCP) is relayed.
 
 #### `--dhcp4`
 
@@ -387,10 +445,11 @@ interfaces start at `NUMBER + 1`.
 Enable access from the relay host itself into the relayed IPv4 networks,
 using `IP` as the source address. Implies `-4`.
 
-`relaydx` answers ARP for `IP` on the relay interfaces, allocates one extra
-policy table, and installs host routes there with `prefsrc = IP`. `IP` should
-be an address you dedicate to this purpose; it does not have to be configured
-on an interface.
+`relaydx` answers ARP (including RFC 5227 ARP probes) for `IP` on the relay
+interfaces, registers `IP/32` in `RT_TABLE_LOCAL` (`RTPROT_BOOT`) so return
+traffic is delivered locally, allocates one extra policy table, and installs
+host routes there with `prefsrc = IP`. `IP` should be an address you dedicate
+to this purpose; it does not have to be configured on an interface.
 
 ### IPv6 options
 
@@ -418,7 +477,10 @@ When DHCPv6 server mode is also on, the RA Other-Config flag is set.
 
 DHCPv6 mode.
 
-- `relay` — DHCPv6 relay between downstream clients and the master.
+- `relay` — DHCPv6 relay between downstream clients and `ff02::1:2` on the
+  master interface. Uses the downstream global/ULA address as `link-address`,
+  falling back to the master's global/ULA address or `::` (RFC 8415 §19.1.1)
+  alongside `Interface-Id` when interfaces only have link-local addresses.
 - `server` — mini-server: stateless info, stateful IA_NA, and IA_PD.
 - `off` — disable DHCPv6.
 
@@ -452,8 +514,10 @@ Always rewrite DNS servers announced in RA (RDNSS) and DHCPv6.
 --rewrite-dns6=2001:db8::53    # use this address (note the '=')
 ```
 
-Use the no-argument form together with a local DNS proxy. Authenticated
-DHCPv6 replies are not rewritten.
+Use the no-argument form together with a local DNS proxy; it selects a global/ULA
+address on the outgoing interface, falling back to the master interface or the
+outgoing interface's link-local address. Authenticated DHCPv6 replies are
+forwarded unmodified without rewriting DNS.
 
 #### `--always-default6`
 
@@ -577,9 +641,11 @@ Default sysctl changes, applied only for enabled families:
 `accept_ra=2` is set **before** global IPv6 forwarding so the upstream
 interface still accepts Router Advertisements.
 
-relaydx does not add interface addresses. IPv4 and global IPv6 addresses on the
-relay interfaces are required for NDP probes, policy routing and DHCPv6 relay,
-and remain the responsibility of the host network manager.
+relaydx does not assign primary interface addresses itself (in NDP relay mode
+it mirrors global IPv6 addresses from the master interface onto downstream
+interfaces). IPv4 relay and DHCPv6 relay can operate on addressless interfaces,
+while NDP probes and IPv6 server mode rely on addresses configured by the host
+network manager.
 
 #### `-h`, `--help`
 

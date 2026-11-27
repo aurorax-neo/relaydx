@@ -37,7 +37,7 @@ sudo cmake --install cmake-build-linux --prefix /usr
 可使用以下命令下载并安装：
 
 ```sh
-VERSION=v0.1.4
+VERSION=v0.1.5
 TARGET=x86_64-unknown-linux-musl
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz"
 curl -fLO "https://github.com/aurorax-neo/relaydx/releases/download/${VERSION}/relaydx-${VERSION}-${TARGET}.tar.gz.sha256"
@@ -58,7 +58,7 @@ TARGET=aarch64-unknown-linux-musl
 每个压缩包只有一个顶层目录，内部为简单的平铺结构：
 
 ```text
-relaydx-v0.1.4-x86_64-unknown-linux-musl/
+relaydx-v0.1.5-x86_64-unknown-linux-musl/
 ├── relaydx
 ├── relaydx.service
 ├── relaydx.default
@@ -66,6 +66,7 @@ relaydx-v0.1.4-x86_64-unknown-linux-musl/
 ├── uninstall.sh
 ├── update.sh
 ├── version.txt
+├── CHANGELOG.md
 ├── README.md
 ├── README.zh.md
 ├── LICENSE
@@ -90,7 +91,7 @@ sudo relaydx-update
 安装指定版本：
 
 ```sh
-sudo relaydx-update v0.1.4
+sudo relaydx-update v0.1.5
 ```
 
 如果 GitHub 访问较慢或被拦截，可使用会给 GitHub URL 加前缀的加速镜像，
@@ -98,7 +99,7 @@ sudo relaydx-update v0.1.4
 
 ```sh
 sudo relaydx-update --mirror https://ghfast.top
-sudo RELAYDX_GITHUB_MIRROR=https://ghfast.top relaydx-update v0.1.4
+sudo RELAYDX_GITHUB_MIRROR=https://ghfast.top relaydx-update v0.1.5
 ```
 
 也可以写进 `/etc/default/relaydx`：
@@ -118,10 +119,61 @@ SHA256 文件，校验后安装，保留 `/etc/default/relaydx`，并且只在�
 运行时重启 `relaydx.service`。若请求版本已经安装，则成功退出，不下载文件，
 也不重启服务。更新需要 `curl`、`sha256sum`、`tar` 和有效的系统 CA 证书。
 
-推送与 `version.txt` 匹配的 tag（例如 `v0.1.4`）会触发
-`.github/workflows/release.yml`。workflow 直接完成两个目标平台的构建、
-静态链接检查、打包、SHA256 和 GitHub Release 发布。若同版本 GitHub
-Release 已存在，则跳过构建和发布任务。
+推送与 `version.txt` 一致且在 `CHANGELOG.md` 中包含非空版本段落的 SemVer tag
+（例如 `v0.1.5`）会触发 `.github/workflows/release.yml`。工作流会先完成版本与
+变更日志门禁校验，再构建两个目标平台的静态 musl 归档包、生成 SHA256（含单包
+`*.sha256` 与汇总 `checksums.txt`）、发布 GitHub Release，并以零 QEMU 模式构建推送
+`linux/amd64` 与 `linux/arm64` 多架构 GHCR 容器镜像。若对应版本的两个归档制品已上传且
+未指定 `force_build`，工作流会自动同步 `CHANGELOG.md` 说明并短路跳过重复编译。
+
+## Docker 部署
+
+官方多架构容器镜像（`linux/amd64`、`linux/arm64`，基于 `alpine:3.21` 与纯静态
+musl 二进制构建）发布于 GitHub Container Registry：
+
+```sh
+docker pull ghcr.io/aurorax-neo/relaydx:latest
+```
+
+由于 `relaydx` 直接操作宿主机二/三层网卡（`AF_PACKET`）与策略路由表
+（`NETLINK_ROUTE`），在 Linux 宿主机上需使用 `--network host` 并授予
+`NET_ADMIN` 与 `NET_RAW` 权限运行：
+
+```sh
+docker run -d --name relaydx \
+    --restart unless-stopped \
+    --network host \
+    --cap-add NET_ADMIN \
+    --cap-add NET_RAW \
+    -v /proc/sys/net:/proc/sys/net:rw \
+    ghcr.io/aurorax-neo/relaydx:latest \
+    -4 -6 -M wan0 -I wan0 -I lan0 --broadcast4 --dhcp4
+```
+
+若容器内保持 `/proc/sys` 只读，请先在宿主机配置好转发相关的 sysctl（见
+**转发所需的内核与防火墙配置**），并在启动参数末尾追加
+`--no-forwarding-setup`：
+
+```sh
+docker run -d --name relaydx \
+    --restart unless-stopped \
+    --network host \
+    --cap-add NET_ADMIN \
+    --cap-add NET_RAW \
+    ghcr.io/aurorax-neo/relaydx:latest \
+    -4 -6 -M wan0 -I wan0 -I lan0 --broadcast4 --dhcp4 --no-forwarding-setup
+```
+
+使用 Docker Compose 或本地源码构建时，先修改 `compose.yaml` 中的上下游接口名，
+然后执行：
+
+```sh
+# 直接拉取预构建 GHCR 镜像启动：
+docker compose up -d
+
+# 或使用本地 Dockerfile 从源码构建并启动：
+docker compose up -d --build
+```
 
 ## 快速开始
 
@@ -299,7 +351,7 @@ relaydx -6 -M wan0 -i wan0 -i '~lan0'
 
 在列出的接口之间转发 IPv4 广播。隐含 `-4`。
 
-不加此选项时，只中继 ARP（以及可选的 DHCP）。
+启用后会挂载内核 BPF 过滤器（`SO_ATTACH_FILTER`）仅捕获二层广播/组播帧（避免单播流量拷贝至用户态），并为虚拟网卡或网桥（`veth`、`virtio-net`、`br-lan`）补齐 `CHECKSUM_PARTIAL` UDP 校验和重算。不加此选项时，只中继 ARP（以及可选的 DHCP）。
 
 #### `--dhcp4`
 
@@ -351,7 +403,7 @@ IPv4 策略路由表号的起始值。默认 `16800`，最小 `1`。
 
 允许中继主机自身访问被中继的 IPv4 网络，并以 `IP` 作为源地址。隐含 `-4`。
 
-`relaydx` 会在中继接口上对 `IP` 应答 ARP，额外分配一张策略表，并在其中安装 `prefsrc = IP` 的主机路由。`IP` 应是专门用于此目的的地址，不必配置在某个接口上。
+`relaydx` 会在中继接口上对 `IP` 应答 ARP（含 RFC 5227 ARP Probe 冲突防御），在 `RT_TABLE_LOCAL` 中自动注册 `IP/32` 本地路由以确保回包上送本机，并额外分配一张策略表在其中安装 `prefsrc = IP` 的主机路由。`IP` 应是专门用于此目的的地址，不必配置在某个接口上。
 
 ### IPv6 选项
 
@@ -373,7 +425,7 @@ IPv4 策略路由表号的起始值。默认 `16800`，最小 `1`。
 
 DHCPv6 模式。
 
-- `relay` — 在下游客户端与 master 之间做 DHCPv6 中继。
+- `relay` — 在下游客户端与 master 接口上的 `ff02::1:2` 之间做 DHCPv6 中继。`link-address` 优先选用下游全局/ULA 地址，回退至 master 全局/ULA 地址；当上下游均仅有 link-local 地址时按 RFC 8415 §19.1.1 置为 `::` 并携带 `Interface-Id`。
 - `server` — 迷你服务器：无状态信息、有状态 IA_NA，以及 IA_PD。
 - `off` — 关闭 DHCPv6。
 
@@ -402,7 +454,8 @@ DHCPv6 模式。
 --rewrite-dns6=2001:db8::53    # 使用指定地址（注意 '='）
 ```
 
-无参数形式通常配合本机 DNS 代理使用。带认证的 DHCPv6 应答不会被改写。
+无参数形式通常配合本机 DNS 代理使用，会依次尝试出接口全局/ULA 地址、master
+全局/ULA 地址或出接口 link-local 地址。带认证的 DHCPv6 应答不会改写 DNS，会保持原样转发。
 
 #### `--always-default6`
 
@@ -509,8 +562,7 @@ PID 文件路径。默认 `/var/run/relaydx.pid`。仅在使用 `-d` 时写入�
 
 `accept_ra=2` 在打开全局 IPv6 转发**之前**设置，这样上游接口仍然接受路由通告。
 
-relaydx 不会给接口添加地址。中继接口上的 IPv4 地址和全局 IPv6 地址是 NDP
-探测、策略路由和 DHCPv6 relay 所必需的，仍由系统网络管理器负责配置。
+relaydx 不会自行分配接口主地址（NDP 代理模式下会将 master 接口的全局 IPv6 地址同步到下游接口）。IPv4 中继与 DHCPv6 中继均可在无地址接口上运行，而 NDP 探测与 IPv6 服务器模式所需的前缀地址仍由系统网络管理器负责配置。
 
 #### `-h`, `--help`
 

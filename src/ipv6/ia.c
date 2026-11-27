@@ -148,6 +148,7 @@ int dhcpv6_init_ia(const struct relayd_config *relayd_config, int dhcpv6_socket)
 					}
 					memcpy(n, a, sizeof(*a) + duidlen);
 					list_add_tail(&n->head, &c->head);
+					break;
 				} else if (c->assigned == a->assigned) {
 					// Already an assignment with that number
 					break;
@@ -297,43 +298,49 @@ static void write_statefile(void)
 					continue;
 
 				char ipbuf[INET6_ADDRSTRLEN];
-				char leasebuf[512];
 				char duidbuf[264];
 				const char hex[] = "0123456789abcdef";
 
-				for (size_t i = 0; i < c->clid_len; ++i) {
-					duidbuf[2 * i] = hex[(c->clid_data[i] >> 4) & 0x0f];
-					duidbuf[2 * i + 1] = hex[c->clid_data[i] & 0x0f];
+				for (size_t j = 0; j < c->clid_len; ++j) {
+					duidbuf[2 * j] = hex[(c->clid_data[j] >> 4) & 0x0f];
+					duidbuf[2 * j + 1] = hex[c->clid_data[j] & 0x0f];
 				}
 				duidbuf[c->clid_len * 2] = 0;
 
-				// iface DUID iaid hostname lifetime assigned length [addrs...]
-				int l = snprintf(leasebuf, sizeof(leasebuf), "# %s %s %x %s %u %x %u ",
+				struct in6_addr addr;
+				if (c->length == 128 && c->hostname) {
+					for (size_t j = 0; j < iface->pd_addr_len; ++j) {
+						if (iface->pd_addr[j].prefix > 64)
+							continue;
+						addr = iface->pd_addr[j].addr;
+						addr.s6_addr32[3] = htonl(c->assigned);
+						inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf));
+						fprintf(fp, "%s\t%s\n", ipbuf, c->hostname);
+						break;
+					}
+				}
+
+				// # iface DUID iaid hostname lifetime assigned length [addrs...]
+				fprintf(fp, "# %s %s %x %s %u %x %u",
 						iface->ifname, duidbuf, ntohl(c->iaid),
 						(c->hostname ? c->hostname : "-"),
 						(unsigned)(c->valid_until > now ?
 								(c->valid_until - now + wall_time) : 0),
 						c->assigned, (unsigned)c->length);
 
-				struct in6_addr addr;
-				for (size_t i = 0; i < iface->pd_addr_len; ++i) {
-					if (iface->pd_addr[i].prefix > 64)
+				for (size_t j = 0; j < iface->pd_addr_len; ++j) {
+					if (iface->pd_addr[j].prefix > 64)
 						continue;
 
-					addr = iface->pd_addr[i].addr;
+					addr = iface->pd_addr[j].addr;
 					if (c->length == 128)
 						addr.s6_addr32[3] = htonl(c->assigned);
 					else
 						addr.s6_addr32[1] |= htonl(c->assigned);
-					inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf) - 1);
-
-					if (c->length == 128 && c->hostname && i == 0)
-						fprintf(fp, "%s\t%s\n", ipbuf, c->hostname);
-
-					l += snprintf(leasebuf + l, sizeof(leasebuf) - l, "%s/%hhu ", ipbuf, c->length);
+					inet_ntop(AF_INET6, &addr, ipbuf, sizeof(ipbuf));
+					fprintf(fp, " %s/%hhu", ipbuf, c->length);
 				}
-				leasebuf[l - 1] = '\n';
-				fwrite(leasebuf, 1, l, fp);
+				fputc('\n', fp);
 			}
 		}
 
@@ -539,7 +546,7 @@ static void update(struct relayd_interface *iface)
 				list_for_each_entry(a, &iface->pd_assignments, head)
 					if (a != c && a->clid_len == c->clid_len &&
 							!memcmp(a->clid_data, c->clid_data, a->clid_len))
-						c->reconf_cnt = INT_MAX;
+						a->reconf_cnt = INT_MAX;
 			}
 		}
 
@@ -565,16 +572,22 @@ static void reconf_timer(struct relayd_event *event)
 	}
 
 	time_t now = monotonic_time();
+	bool expired_state = false;
 	for (size_t i = 0; i < config->slavecount; ++i) {
 		struct relayd_interface *iface = &config->slaves[i];
 		if (iface->pd_assignments.next == NULL)
-			return;
+			continue;
 
 		struct assignment *a, *n;
 		list_for_each_entry_safe(a, n, &iface->pd_assignments, head) {
 			if (a->valid_until < now) {
 				if ((a->length < 128 && a->clid_len > 0) ||
 						(a->length == 128 && a->clid_len == 0)) {
+					if (a->clid_len > 0 && a->length <= 64) {
+						apply_lease(iface, a, false);
+						if (a->valid_until > 0)
+							expired_state = true;
+					}
 					list_del(&a->head);
 					free(a->hostname);
 					free(a);
@@ -592,6 +605,8 @@ static void reconf_timer(struct relayd_event *event)
 			iface->pd_reconf = false;
 		}
 	}
+	if (expired_state)
+		write_statefile();
 }
 
 
@@ -870,6 +885,8 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 
 			if (!a) { // Create new binding
 				a = calloc(1, sizeof(*a) + clid_len);
+				if (!a)
+					continue;
 				a->clid_len = clid_len;
 				a->iaid = ia->iaid;
 				a->length = reqlen;
@@ -919,14 +936,18 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 
 			ia_response_len = append_reply(buf, buflen, status, ia, a, iface, true);
 
-			// Was only a solicitation: mark binding for removal
+			// Was only a solicitation: remove provisional kernel route and mark binding for removal
 			if (assigned && hdr->msg_type == DHCPV6_MSG_SOLICIT) {
+				apply_lease(iface, a, false);
 				a->valid_until = 0;
 			} else if (assigned && hdr->msg_type == DHCPV6_MSG_REQUEST) {
 				if (hostname_len > 0) {
-					a->hostname = realloc(a->hostname, hostname_len + 1);
-					memcpy(a->hostname, hostname, hostname_len);
-					a->hostname[hostname_len] = 0;
+					char *new_host = realloc(a->hostname, hostname_len + 1);
+					if (new_host) {
+						a->hostname = new_host;
+						memcpy(a->hostname, hostname, hostname_len);
+						a->hostname[hostname_len] = 0;
+					}
 				}
 				a->accept_reconf = accept_reconf;
 				apply_lease(iface, a, true);
@@ -947,6 +968,8 @@ size_t dhcpv6_handle_ia(uint8_t *buf, size_t buflen, struct relayd_interface *if
 				ia_response_len = append_reply(buf, buflen, status, ia, a, iface, false);
 				if (a)
 					apply_lease(iface, a, true);
+				else if (ia_response_len == sizeof(struct dhcpv6_ia_hdr))
+					ia_response_len = 0;
 			} else if (hdr->msg_type == DHCPV6_MSG_RELEASE) {
 				a->valid_until = 0;
 				apply_lease(iface, a, false);

@@ -106,7 +106,7 @@ case "$REQUESTED_VERSION" in
     v*) VERSION=$REQUESTED_VERSION ;;
     *) VERSION="v$REQUESTED_VERSION" ;;
 esac
-if ! printf '%s\n' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+if ! printf '%s\n' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
     echo "Invalid version: $VERSION" >&2
     exit 1
 fi

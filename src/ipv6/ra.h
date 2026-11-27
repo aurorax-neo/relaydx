@@ -24,10 +24,13 @@ struct icmpv6_opt {
 };
 
 
-#define icmpv6_for_each_option(opt, start, end)\
-	for (opt = (struct icmpv6_opt*)(start);\
-	(void*)(opt + 1) <= (void*)(end) && opt->len > 0 &&\
-	(void*)(opt + opt->len) <= (void*)(end); opt += opt->len)
+#define icmpv6_for_each_option(opt, start, end) \
+	for (opt = (struct icmpv6_opt *)(start); \
+		(const uint8_t *)(opt) <= (const uint8_t *)(end) && \
+		(size_t)((const uint8_t *)(end) - (const uint8_t *)(opt)) >= 8 && \
+		opt->len > 0 && \
+		(size_t)((const uint8_t *)(end) - (const uint8_t *)(opt)) >= (size_t)opt->len * 8; \
+		opt += opt->len)
 
 
 #define MaxRtrAdvInterval 600

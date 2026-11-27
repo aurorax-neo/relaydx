@@ -132,11 +132,15 @@ struct dhcpv6_ia_addr {
 
 
 
-#define dhcpv6_for_each_option(start, end, otype, olen, odata)\
-	for (uint8_t *_o = (uint8_t*)(start); _o + 4 <= (end) &&\
-		((otype) = _o[0] << 8 | _o[1]) && ((odata) = (void*)&_o[4]) &&\
-		((olen) = _o[2] << 8 | _o[3]) + (odata) <= (end); \
-		_o += 4 + (_o[2] << 8 | _o[3]))
+#define dhcpv6_for_each_option(start, end, otype, olen, odata) \
+	for (uint8_t *_o = (uint8_t *)(start); \
+		(const uint8_t *)_o <= (const uint8_t *)(end) && \
+		(size_t)((const uint8_t *)(end) - (const uint8_t *)_o) >= 4 && \
+		(((otype) = ((uint16_t)_o[0] << 8) | _o[1]), \
+		 ((odata) = (void *)&_o[4]), \
+		 ((olen) = ((uint16_t)_o[2] << 8) | _o[3]), \
+		 (size_t)((const uint8_t *)(end) - (const uint8_t *)(odata)) >= (size_t)(olen)); \
+		_o += 4 + (((uint16_t)_o[2] << 8) | _o[3]))
 
 int dhcpv6_init_ia(const struct relayd_config *relayd_config, int socket);
 void dhcpv6_deinit_ia(void);

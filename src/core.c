@@ -337,6 +337,7 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 			ifa = NLMSG_DATA(nh);
 			if (ifa->ifa_family != AF_INET6 ||
 					ifa->ifa_scope != RT_SCOPE_UNIVERSE ||
+					(ifa->ifa_flags & IFA_F_DADFAILED) ||
 					ifa->ifa_index != (unsigned int)ifindex)
 				continue;
 
@@ -361,6 +362,98 @@ ssize_t relayd_get_interface_addresses(int ifindex,
 			count++;
 		}
 	}
+}
+
+static int relayd_get_interface_linklocal(int ifindex, struct in6_addr *out)
+{
+	struct {
+		struct nlmsghdr nh;
+		struct ifaddrmsg ifa;
+	} req = {
+		.nh = {
+			.nlmsg_len = sizeof(req),
+			.nlmsg_type = RTM_GETADDR,
+			.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP,
+			.nlmsg_seq = ++rtnl_seq,
+		},
+		.ifa = {.ifa_family = AF_INET6, .ifa_index = ifindex},
+	};
+	uint8_t buf[8192];
+	bool found = false;
+
+	if (ifindex <= 0 ||
+			send(rtnl_socket, &req, sizeof(req), 0) != (ssize_t)sizeof(req))
+		return -1;
+
+	for (;;) {
+		ssize_t len = recv(rtnl_socket, buf, sizeof(buf), 0);
+		struct nlmsghdr *nh;
+
+		if (len < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+
+		for (nh = (struct nlmsghdr *)buf; NLMSG_OK(nh, len);
+				nh = NLMSG_NEXT(nh, len)) {
+			struct ifaddrmsg *ifa;
+			struct rtattr *rta;
+			int alen;
+
+			if (nh->nlmsg_seq != req.nh.nlmsg_seq)
+				continue;
+			if (nh->nlmsg_type == NLMSG_DONE)
+				return found ? 0 : -1;
+			if (nh->nlmsg_type == NLMSG_ERROR)
+				return -1;
+			if (nh->nlmsg_type != RTM_NEWADDR || found)
+				continue;
+
+			ifa = NLMSG_DATA(nh);
+			if (ifa->ifa_family != AF_INET6 ||
+					(ifa->ifa_flags & (IFA_F_DADFAILED | IFA_F_TENTATIVE)) ||
+					ifa->ifa_index != (unsigned int)ifindex)
+				continue;
+
+			alen = IFA_PAYLOAD(nh);
+			for (rta = IFA_RTA(ifa); RTA_OK(rta, alen);
+					rta = RTA_NEXT(rta, alen)) {
+				if (rta->rta_type == IFA_ADDRESS &&
+						RTA_PAYLOAD(rta) >= sizeof(struct in6_addr)) {
+					const struct in6_addr *cand = RTA_DATA(rta);
+					if (IN6_IS_ADDR_LINKLOCAL(cand)) {
+						*out = *cand;
+						found = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+}
+
+int relayd_get_interface_dns_address(const struct relayd_config *config,
+		const struct relayd_interface *iface, struct in6_addr *out)
+{
+	struct relayd_ipaddr ip;
+
+	if (!config || !iface || !out)
+		return -1;
+	if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
+		*out = config->dnsaddr;
+		return 0;
+	}
+	if (relayd_get_interface_addresses(iface->ifindex, &ip, 1) >= 1) {
+		*out = ip.addr;
+		return 0;
+	}
+	if (config->master.ifindex > 0 &&
+			relayd_get_interface_addresses(config->master.ifindex, &ip, 1) >= 1) {
+		*out = ip.addr;
+		return 0;
+	}
+	return relayd_get_interface_linklocal(iface->ifindex, out);
 }
 
 struct relayd_interface *relayd_get_interface_by_index(int ifindex)

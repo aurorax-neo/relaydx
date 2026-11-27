@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -163,9 +164,11 @@ static void sigusr1_refresh(_unused int signal)
 
 	if (!config)
 		return;
-	for (size_t i = 0; i < config->slavecount; ++i)
-		timerfd_settime(config->slaves[i].timer_rs.socket,
-				0, &its, NULL);
+	for (size_t i = 0; i < config->slavecount; ++i) {
+		if (config->slaves[i].timer_rs.socket >= 0)
+			timerfd_settime(config->slaves[i].timer_rs.socket,
+					0, &its, NULL);
+	}
 }
 
 
@@ -531,22 +534,17 @@ static void forward_router_solicitation(const struct relayd_interface *iface)
 static void forward_router_advertisement(uint8_t *data, size_t len)
 {
 	struct nd_router_advert *adv = (struct nd_router_advert *)data;
-
-	// Rewrite options
 	uint8_t *end = data + len;
 	uint8_t *mac_ptr = NULL;
-	struct in6_addr *dns_ptr = NULL;
-	size_t dns_count = 0;
+	bool has_rdnss = false;
 
 	struct icmpv6_opt *opt;
 	icmpv6_for_each_option(opt, &adv[1], end) {
-		if (opt->type == ND_OPT_SOURCE_LINKADDR) {
-			// Store address of source MAC-address
+		if (opt->type == ND_OPT_SOURCE_LINKADDR && opt->len == 1) {
 			mac_ptr = opt->data;
-		} else if (opt->type == ND_OPT_RECURSIVE_DNS && opt->len > 1) {
-			// Check if we have to rewrite DNS
-			dns_ptr = (struct in6_addr*)&opt->data[6];
-			dns_count = (opt->len - 1) / 2;
+		} else if (opt->type == ND_OPT_RECURSIVE_DNS && opt->len >= 3 &&
+				((opt->len - 1) % 2) == 0) {
+			has_rdnss = true;
 		}
 	}
 
@@ -566,24 +564,22 @@ static void forward_router_advertisement(uint8_t *data, size_t len)
 		if (mac_ptr)
 			memcpy(mac_ptr, config->slaves[i].mac, 6);
 
-		// If we have to rewrite DNS entries
-		if (config->always_rewrite_dns && dns_ptr && dns_count > 0) {
-			const struct in6_addr *rewrite;
-			struct relayd_ipaddr addr;
+		// Rewrite all RDNSS options if requested and a local DNS address exists
+		if (config->always_rewrite_dns && has_rdnss) {
+			struct in6_addr rewrite;
 
-			if (!IN6_IS_ADDR_UNSPECIFIED(&config->dnsaddr)) {
-				rewrite = &config->dnsaddr;
-			} else {
-				if (relayd_get_interface_addresses(
-					config->slaves[i].ifindex,
-					&addr, 1) < 1)
-				continue; // Unable to comply
-				rewrite = &addr.addr;
+			if (relayd_get_interface_dns_address(config, &config->slaves[i],
+					&rewrite) == 0) {
+				icmpv6_for_each_option(opt, &adv[1], end) {
+					if (opt->type == ND_OPT_RECURSIVE_DNS && opt->len >= 3 &&
+							((opt->len - 1) % 2) == 0) {
+						size_t count = (size_t)(opt->len - 1) / 2;
+						uint8_t *addrs = &opt->data[6];
+						for (size_t j = 0; j < count; ++j)
+							memcpy(addrs + j * 16, &rewrite, sizeof(rewrite));
+					}
+				}
 			}
-
-			// Copy over any other addresses
-			for (size_t i = 0; i < dns_count; ++i)
-				dns_ptr[i] = *rewrite;
 		}
 
 		bind_icmp6_socket(&config->slaves[i]);

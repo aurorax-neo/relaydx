@@ -1,0 +1,20 @@
+FROM --platform=$BUILDPLATFORM alpine:3.21 AS sysdeps
+RUN apk add --no-cache ca-certificates tzdata && \
+    printf "Asia/Shanghai\n" > /tmp/timezone
+
+FROM alpine:3.21
+ARG TARGETARCH
+WORKDIR /app
+ENV TZ=Asia/Shanghai \
+    PATH="/app:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+COPY --from=sysdeps /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=sysdeps /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+COPY --from=sysdeps /tmp/timezone /etc/timezone
+
+# Inject host-compiled static musl binary directly without any cross-arch RUN
+COPY --chmod=0755 docker-bin/${TARGETARCH}/relaydx /app/relaydx
+
+EXPOSE 67/udp 547/udp
+ENTRYPOINT ["/app/relaydx"]
+CMD ["--help"]

@@ -16,6 +16,7 @@
  */
 
 #include <sys/socket.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -81,6 +82,61 @@ chksum(uint16_t sum, const uint8_t *data, uint16_t len)
 }
 
 static void
+update_udp_checksum(const uint8_t *saddr_daddr, struct udphdr *udp, int udplen)
+{
+	uint16_t sum;
+
+	udp->check = 0;
+	sum = (uint16_t)udplen + IPPROTO_UDP;
+	sum = chksum(sum, saddr_daddr, 8);
+	sum = chksum(sum, (const uint8_t *)udp, (uint16_t)udplen);
+	sum = ~sum;
+	if (sum == 0)
+		sum = 0xffff;
+
+	udp->check = htons(sum);
+}
+
+void
+relayd_fixup_bcast_udp_checksum(void *data, int len)
+{
+	struct ip_packet *pkt = data;
+	struct udphdr *udp;
+	const uint8_t *addrs;
+	int ip_header_len;
+	int tot_len;
+	int udplen;
+
+	if (len < (int)(sizeof(pkt->eth) + sizeof(pkt->iph)))
+		return;
+	if (pkt->eth.ether_type != htons(ETH_P_IP) ||
+			pkt->iph.version != 4 || pkt->iph.ihl < 5 ||
+			pkt->iph.protocol != IPPROTO_UDP)
+		return;
+	if (ntohs(pkt->iph.frag_off) & (IP_MF | IP_OFFMASK))
+		return;
+
+	ip_header_len = pkt->iph.ihl << 2;
+	tot_len = ntohs(pkt->iph.tot_len);
+	if (tot_len < ip_header_len ||
+			(int)sizeof(pkt->eth) + tot_len > len)
+		return;
+
+	udp = (struct udphdr *)((uint8_t *)&pkt->iph + ip_header_len);
+	if ((uint8_t *)(udp + 1) > (uint8_t *)data + len)
+		return;
+
+	udplen = ntohs(udp->len);
+	if (udplen < (int)sizeof(*udp) || ip_header_len + udplen > tot_len ||
+			udp->check == 0)
+		return;
+
+	addrs = (const uint8_t *)data + sizeof(pkt->eth) +
+			offsetof(struct iphdr, saddr);
+	update_udp_checksum(addrs, udp, udplen);
+}
+
+static void
 parse_dhcp_options(struct relayd_host *host, struct dhcp_header *dhcp, int len)
 {
 	uint8_t *cursor = dhcp->option_data;
@@ -108,7 +164,8 @@ parse_dhcp_options(struct relayd_host *host, struct dhcp_header *dhcp, int len)
 		case DHCP_OPTION_ROUTER:
 			DPRINTF(2, "Found a DHCP router option, len=%u\n",
 					option_len);
-			if (option_len < 4)
+			if (option_len < 4 || option_data[0] == 0 ||
+					option_data[0] == 127 || option_data[0] >= 224)
 				break;
 			if (!memcmp(option_data, host->ipaddr, 4))
 				relayd_add_host_route(host, dest, 0);
@@ -135,7 +192,6 @@ bool relayd_handle_dhcp_packet(struct relayd_interface *rif, void *data, int len
 	int udplen;
 	int ip_header_len;
 	int frame_payload_len;
-	uint16_t sum;
 
 	if (len < (int)(sizeof(pkt->eth) + sizeof(pkt->iph)))
 		return false;
@@ -143,6 +199,9 @@ bool relayd_handle_dhcp_packet(struct relayd_interface *rif, void *data, int len
 		return false;
 
 	if (pkt->iph.version != 4 || pkt->iph.ihl < 5)
+		return false;
+
+	if (ntohs(pkt->iph.frag_off) & (IP_MF | IP_OFFMASK))
 		return false;
 
 	ip_header_len = pkt->iph.ihl << 2;
@@ -187,14 +246,8 @@ bool relayd_handle_dhcp_packet(struct relayd_interface *rif, void *data, int len
 
 	dhcp->flags |= htons(DHCP_FLAG_BROADCAST);
 
-	udp->check = 0;
-	sum = udplen + IPPROTO_UDP;
-	sum = chksum(sum, (void *) &pkt->iph.saddr, 8);
-	sum = chksum(sum, (void *) udp, udplen);
-	if (sum == 0)
-		sum = 0xffff;
-
-	udp->check = htons(~sum);
+	update_udp_checksum((const uint8_t *)data + sizeof(pkt->eth) +
+			offsetof(struct iphdr, saddr), udp, udplen);
 
 	relayd_forward_bcast_packet(rif, data, len);
 

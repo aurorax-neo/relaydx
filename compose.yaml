@@ -1,0 +1,34 @@
+services:
+  relaydx:
+    image: ghcr.io/aurorax-neo/relaydx:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relaydx
+    restart: unless-stopped
+    # relaydx operates directly on host L2/L3 interfaces and policy routing tables.
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      # Allow relaydx to manage /proc/sys/net forwarding & accept_ra sysctls.
+      # Alternatively, configure sysctls on the host and append --no-forwarding-setup.
+      - /proc/sys/net:/proc/sys/net:rw
+      # Optional persistent directory for --state6 /var/lib/relaydx/leases.
+      - relaydx-state:/var/lib/relaydx
+    # Replace wls224 (upstream) and ens256 (downstream) with your host interfaces.
+    command:
+      - "-4"
+      - "-6"
+      - "-M"
+      - "wls224"
+      - "-I"
+      - "wls224"
+      - "-I"
+      - "ens256"
+      - "--broadcast4"
+      - "--dhcp4"
+
+volumes:
+  relaydx-state:

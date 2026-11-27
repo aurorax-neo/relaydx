@@ -253,17 +253,21 @@ static int set_mode(bool *enabled, bool *server, const char *mode)
 	return 0;
 }
 
-static void stop_handler(_unused int signal_number)
+static void stop_signal_cb(_unused struct uloop_signal *sig)
 {
 	terminate_requested = 1;
 	uloop_end();
 }
 
-static void reload_handler(_unused int signal_number)
+static void reload_signal_cb(_unused struct uloop_signal *sig)
 {
 	reload_requested = true;
 	uloop_end();
 }
+
+static struct uloop_signal sig_term = {.signo = SIGTERM, .cb = stop_signal_cb};
+static struct uloop_signal sig_int = {.signo = SIGINT, .cb = stop_signal_cb};
+static struct uloop_signal sig_hup = {.signo = SIGHUP, .cb = reload_signal_cb};
 
 static void watchdog_handler(struct uloop_timeout *timeout)
 {
@@ -293,12 +297,6 @@ static void setup_watchdog(void)
 static void retry_handler(_unused struct uloop_timeout *timeout)
 {
 	uloop_end();
-}
-
-static void child_handler(_unused int signal_number)
-{
-	while (waitpid(-1, NULL, WNOHANG) > 0)
-		;
 }
 
 static void link_event_handler(bool available, bool address_change,
@@ -477,7 +475,7 @@ static int write_sysctl_value(const char *path, char desired)
 	return -1;
 }
 
-static int enable_kernel_forwarding(void)
+static int enable_kernel_forwarding(char *failed_path, size_t failed_size)
 {
 	bool ipv6_enabled = relaydx_config.enable_router_discovery_relay ||
 			relaydx_config.enable_dhcpv6_relay || relaydx_config.enable_ndp_relay;
@@ -486,10 +484,17 @@ static int enable_kernel_forwarding(void)
 			 !relaydx_config.enable_router_discovery_server) ||
 			(relaydx_config.enable_dhcpv6_relay &&
 			 !relaydx_config.enable_dhcpv6_server);
+	const char *ipv4_path = "/proc/sys/net/ipv4/ip_forward";
+	const char *ipv6_path = "/proc/sys/net/ipv6/conf/all/forwarding";
 
-	if (relaydx_config.enable_ipv4 &&
-			write_sysctl_value("/proc/sys/net/ipv4/ip_forward", '1') < 0)
+	if (failed_path && failed_size > 0)
+		failed_path[0] = '\0';
+
+	if (relaydx_config.enable_ipv4 && write_sysctl_value(ipv4_path, '1') < 0) {
+		if (failed_path && failed_size > 0)
+			snprintf(failed_path, failed_size, "%s", ipv4_path);
 		return -1;
+	}
 	if (!ipv6_enabled)
 		return 0;
 
@@ -498,10 +503,18 @@ static int enable_kernel_forwarding(void)
 
 		snprintf(path, sizeof(path), "/proc/sys/net/ipv6/conf/%s/accept_ra",
 				relaydx_config.master.ifname);
-		if (write_sysctl_value(path, '2') < 0)
+		if (write_sysctl_value(path, '2') < 0) {
+			if (failed_path && failed_size > 0)
+				snprintf(failed_path, failed_size, "%s", path);
 			return -1;
+		}
 	}
-	return write_sysctl_value("/proc/sys/net/ipv6/conf/all/forwarding", '1');
+	if (write_sysctl_value(ipv6_path, '1') < 0) {
+		if (failed_path && failed_size > 0)
+			snprintf(failed_path, failed_size, "%s", ipv6_path);
+		return -1;
+	}
+	return 0;
 }
 
 static void stop_relay_runtime(void)
@@ -523,10 +536,17 @@ static void stop_relay_runtime(void)
 static int start_relay_runtime(const struct string_list *gateways,
 		const struct string_list *routes, bool setup_forwarding)
 {
+	char failed_sysctl[128] = "";
+
 	if (prepare_interfaces() < 0)
 		return -1;
-	if (setup_forwarding && enable_kernel_forwarding() < 0) {
-		syslog(LOG_ERR, "Unable to configure kernel IP forwarding: %s",
+	if (setup_forwarding &&
+			enable_kernel_forwarding(failed_sysctl, sizeof(failed_sysctl)) < 0) {
+		syslog(LOG_ERR,
+				"Unable to configure kernel IP forwarding (%s): %s "
+				"(configure sysctls on the host and pass --no-forwarding-setup "
+				"if /proc/sys is read-only)",
+				failed_sysctl[0] ? failed_sysctl : "/proc/sys/net",
 				strerror(errno));
 		goto error;
 	}
@@ -823,10 +843,9 @@ int main(int argc, char **argv)
 		}
 	}
 
-	signal(SIGTERM, stop_handler);
-	signal(SIGHUP, reload_handler);
-	signal(SIGINT, stop_handler);
-	signal(SIGCHLD, child_handler);
+	uloop_signal_add(&sig_term);
+	uloop_signal_add(&sig_int);
+	uloop_signal_add(&sig_hup);
 
 	{
 		char unavailable[IFNAMSIZ] = "";
@@ -887,10 +906,15 @@ runtime_out:
 	if (link_watch_started)
 		relayd_link_watch_done();
 	relayd_core_done();
-	if (uloop_started)
+	if (uloop_started) {
+		uloop_signal_delete(&sig_hup);
+		uloop_signal_delete(&sig_int);
+		uloop_signal_delete(&sig_term);
 		uloop_timeout_cancel(&watchdog_timer);
-	if (uloop_started)
 		uloop_done();
+	}
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		;
 	if (daemon_started)
 		unlink(pidfile);
 out:
